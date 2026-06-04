@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: goforbroke
+
+server:
+  port: 8080
+  ssl:
+    enabled: false
+    certificate: ""
+    key-store: ""
+
