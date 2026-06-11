@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AGP Bets</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="bg-orb bg-orb-left"></div>
+    <div class="bg-orb bg-orb-right"></div>
+
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">AGP Bets</p>
+          <h1>Player stats now, prediction engine later.</h1>
+          <p class="lede">
+            Search, sync, and inspect NFL player records pulled from ESPN and stored in the
+            backend.
+          </p>
+        </div>
+
+        <div class="status-card">
+          <span class="status-label">Backend</span>
+          <strong id="connectionStatus">Checking connection...</strong>
+          <p id="connectionDetail">Connecting to the API.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Search player</h2>
+            <p>Find likely ESPN matches, then sync the exact athlete record you want.</p>
+          </div>
+        </div>
+
+        <form id="syncForm" class="sync-form">
+          <label>
+            Player name
+            <input id="playerName" type="text" placeholder="Jayden Daniels" autocomplete="off" />
+          </label>
+          <button type="submit">Find candidates</button>
+        </form>
+        <p class="hint">
+          This uses <code>GET /api/players/search?name=...</code> to return multiple matching
+          candidates so you can pick the right player even with typos.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Search results</h2>
+            <p>Pick a candidate below, then sync the athlete detail into Postgres.</p>
+          </div>
+          <div class="count">
+            <span id="candidateCount">0</span>
+            <small>candidates found</small>
+          </div>
+        </div>
+
+        <div id="message" class="message hidden"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Team</th>
+                <th>Position</th>
+                <th>Match</th>
+                <th>Stored</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="candidateTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Stored players</h2>
+            <p>Records already persisted in the database after a full athlete-detail sync.</p>
+          </div>
+          <button id="refreshButton" class="secondary">Refresh</button>
+        </div>
+
+        <div class="toolbar">
+          <label class="search">
+            Filter
+            <input id="filterInput" type="text" placeholder="Search by name, team, or position" />
+          </label>
+          <div class="count">
+            <span id="playerCount">0</span>
+            <small>players loaded</small>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+            <th>Team</th>
+            <th>Position</th>
+            <th>Jersey</th>
+            <th>Active</th>
+            <th>Updated</th>
+            <th>Stats</th>
+          </tr>
+        </thead>
+        <tbody id="playerTableBody"></tbody>
+      </table>
+      </div>
+    </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Player insights</h2>
+            <p>Pick a stored player to inspect their recent game logs and stat summaries.</p>
+          </div>
+          <div class="panel-actions">
+            <button id="syncStatsButton" class="secondary" disabled>Sync stats</button>
+            <button id="refreshStatsButton" class="secondary" disabled>Refresh stats</button>
+          </div>
+        </div>
+
+        <div class="insight-grid">
+          <div class="insight-card">
+            <span class="insight-label">Selected player</span>
+            <strong id="selectedPlayerName">No player selected</strong>
+            <p id="selectedPlayerMeta">Choose a player from the stored list or sync a new one.</p>
+          </div>
+          <div class="insight-card">
+            <span class="insight-label">Recent games</span>
+            <strong id="recentGamesCount">0</strong>
+            <p>Game-level stat lines loaded for this athlete.</p>
+          </div>
+          <div class="insight-card">
+            <span class="insight-label">Focus view</span>
+            <strong id="summaryModeLabel">All offense</strong>
+            <p>Summary cards update from the last five games.</p>
+          </div>
+        </div>
+
+        <div id="summaryCards" class="summary-grid">
+          <div class="summary-card empty">Select a player to see computed summaries.</div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Opp</th>
+                <th>Home/Away</th>
+                <th>Yards</th>
+                <th>TDs</th>
+                <th>Turnovers</th>
+                <th>Usage</th>
+              </tr>
+            </thead>
+            <tbody id="statsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

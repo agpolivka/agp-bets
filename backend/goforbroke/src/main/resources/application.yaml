@@ -1,6 +1,18 @@
 spring:
   application:
     name: goforbroke
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/agp_bets}
+    username: ${SPRING_DATASOURCE_USERNAME:agp_bets}
+    password: ${SPRING_DATASOURCE_PASSWORD:agp_bets}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
 
 server:
   port: 8080
@@ -8,4 +20,3 @@ server:
     enabled: false
     certificate: ""
     key-store: ""
-

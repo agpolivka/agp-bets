@@ -1,0 +1,58 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor and IDE metadata
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.dev/
+.project
+.classpath
+.settings/
+.factorypath
+.springBeans
+.sts4-cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+AGENTS.md
+
+# Logs
+*.log
+logs/
+
+# Java / Maven / Spring Boot
+target/
+build/
+out/
+*.class
+*.jar
+*.war
+*.nar
+hs_err_pid*
+replay_pid*
+.mvn/wrapper/maven-wrapper.jar
+
+# Node / Angular / frontend tooling
+node_modules/
+dist/
+coverage/
+.angular/
+.cache/
+tmp/
+temp/
+
+# Docker
+docker-data/
+postgres_data/
+
+# Test / tooling artifacts
+.pytest_cache/
+.coverage
+
