@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -35,6 +36,8 @@ class EspnPlayerIngestionServiceTest {
     player.setId(1L);
     player.setEspnAthleteId("2");
     player.setDisplayName("Jayden Daniels");
+    player.setPosition("QB");
+    player.setTeamName("Washington Commanders");
     player.setFetchedAt(Instant.parse("2026-06-03T23:30:00Z"));
 
     when(playerRepository.findFirstByDisplayNameIgnoreCase("Jayden Daniels"))
@@ -43,6 +46,56 @@ class EspnPlayerIngestionServiceTest {
     Player result = service.findOrLoadPlayerByName("Jayden Daniels");
 
     assertSame(player, result);
+    verify(playerRefreshService, never()).refreshPlayerByAthleteIdAsync("2");
+  }
+
+  @Test
+  void refreshesIncompleteStoredPlayerBeforeReturningIt() throws Exception {
+    Player stale = new Player();
+    stale.setId(1L);
+    stale.setEspnAthleteId("2");
+    stale.setDisplayName("Jayden Daniels");
+    stale.setFetchedAt(Instant.parse("2026-06-03T23:30:00Z"));
+
+    JsonNode athleteDetailNode =
+        objectMapper.readTree(
+            """
+            {
+              "id": "2",
+              "displayName": "Jayden Daniels",
+              "firstName": "Jayden",
+              "lastName": "Daniels",
+              "position": {
+                "displayName": "QB",
+                "abbreviation": "QB"
+              },
+              "team": {
+                "id": "28",
+                "displayName": "Washington Commanders"
+              },
+              "active": true
+            }
+            """);
+
+    Player refreshed = new Player();
+    refreshed.setId(1L);
+    refreshed.setEspnAthleteId("2");
+    refreshed.setDisplayName("Jayden Daniels");
+    refreshed.setPosition("QB");
+    refreshed.setTeamName("Washington Commanders");
+    refreshed.setFetchedAt(clock.instant());
+
+    when(playerRepository.findFirstByDisplayNameIgnoreCase("Jayden Daniels"))
+        .thenReturn(Optional.of(stale));
+    when(espnPlayerClient.fetchAthleteById("2")).thenReturn(athleteDetailNode);
+    when(espnPlayerClient.buildAthleteUrl("2")).thenReturn("https://example.com/2");
+    when(playerUpsertService.upsertAthlete(athleteDetailNode, "https://example.com/2"))
+        .thenReturn(refreshed);
+
+    Player result = service.findOrLoadPlayerByName("Jayden Daniels");
+
+    assertEquals("QB", result.getPosition());
+    assertEquals("Washington Commanders", result.getTeamName());
     verify(playerRefreshService, never()).refreshPlayerByAthleteIdAsync("2");
   }
 
@@ -86,5 +139,59 @@ class EspnPlayerIngestionServiceTest {
 
     assertEquals("2", result.getEspnAthleteId());
     verify(playerRefreshService).refreshPlayerByAthleteIdAsync("2");
+  }
+
+  @Test
+  void backfillsPlayersMissingMetadata() throws Exception {
+    Player stale = new Player();
+    stale.setId(1L);
+    stale.setEspnAthleteId("4426338");
+    stale.setDisplayName("Bo Nix");
+    stale.setFetchedAt(Instant.parse("2026-06-03T23:30:00Z"));
+
+    JsonNode athleteDetailNode =
+        objectMapper.readTree(
+            """
+            {
+              "id": "4426338",
+              "displayName": "Bo Nix",
+              "firstName": "Bo",
+              "lastName": "Nix",
+              "position": {
+                "displayName": "QB",
+                "abbreviation": "QB"
+              },
+              "team": {
+                "id": "7",
+                "displayName": "Denver Broncos"
+              },
+              "active": true
+            }
+            """);
+
+    Player refreshed = new Player();
+    refreshed.setId(1L);
+    refreshed.setEspnAthleteId("4426338");
+    refreshed.setDisplayName("Bo Nix");
+    refreshed.setPosition("QB");
+    refreshed.setTeamName("Denver Broncos");
+    refreshed.setTeamId("7");
+    refreshed.setActive(true);
+    refreshed.setFetchedAt(clock.instant());
+    refreshed.setUpdatedAt(clock.instant());
+
+    when(playerRepository.findPlayersNeedingMetadataBackfill()).thenReturn(List.of(stale));
+    when(espnPlayerClient.fetchAthleteById("4426338")).thenReturn(athleteDetailNode);
+    when(espnPlayerClient.buildAthleteUrl("4426338")).thenReturn("https://example.com/4426338");
+    when(playerUpsertService.upsertAthlete(athleteDetailNode, "https://example.com/4426338"))
+        .thenReturn(refreshed);
+
+    PlayerMetadataBackfillResult result = service.backfillPlayerMetadata();
+
+    assertEquals(1, result.candidatesChecked());
+    assertEquals(1, result.refreshedCount());
+    assertEquals(0, result.failedCount());
+    assertEquals("QB", result.refreshedPlayers().get(0).getPosition());
+    assertEquals("Denver Broncos", result.refreshedPlayers().get(0).getTeamName());
   }
 }

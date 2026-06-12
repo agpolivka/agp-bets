@@ -70,12 +70,10 @@ public final class EspnAthleteMapper {
 
     String firstName = text(profileNode, "firstName");
     String lastName = text(profileNode, "lastName");
-    String position =
-        firstText(contextNode, "position")
-            .orElse(nestedText(contextNode, "position", "abbreviation", "shortDisplayName", "displayName", "name"));
+    String position = resolvePosition(contextNode, profileNode);
     String jerseyNumber = firstText(profileNode, "jersey", "jerseyNumber").orElse(null);
-    String teamName = nestedText(contextNode, "team", "displayName", "shortDisplayName", "name", "location");
-    String teamId = nestedText(contextNode, "team", "id");
+    String teamName = resolveTeamName(contextNode, profileNode);
+    String teamId = resolveTeamId(contextNode, profileNode);
     Boolean active = contextNode.hasNonNull("active") ? contextNode.path("active").asBoolean() : null;
 
     return new PlayerSnapshot(
@@ -93,42 +91,48 @@ public final class EspnAthleteMapper {
         fetchedAt);
   }
 
+  public static AthleteCandidate toCandidate(JsonNode athleteNode, double score) {
+    if (athleteNode == null || athleteNode.isNull()) {
+      throw new IllegalArgumentException("athleteNode must not be null");
+    }
+
+    JsonNode profileNode = athleteNode.hasNonNull("athlete") ? athleteNode.path("athlete") : athleteNode;
+    String athleteId = requireText(profileNode, "id");
+    String displayName =
+        firstText(profileNode, "displayName", "fullName", "shortName", "name")
+            .orElseGet(() -> buildDisplayName(text(profileNode, "firstName"), text(profileNode, "lastName"), athleteId));
+    String firstName = text(profileNode, "firstName");
+    String lastName = text(profileNode, "lastName");
+    String position = resolvePosition(athleteNode, profileNode);
+    String jerseyNumber = firstText(profileNode, "jersey", "jerseyNumber").orElse(null);
+    String teamName = resolveTeamName(athleteNode, profileNode);
+    String teamId = resolveTeamId(athleteNode, profileNode);
+    Boolean active = athleteNode.hasNonNull("active") ? athleteNode.path("active").asBoolean() : null;
+
+    return new AthleteCandidate(
+        athleteId,
+        displayName,
+        firstName,
+        lastName,
+        position,
+        jerseyNumber,
+        teamName,
+        teamId,
+        active,
+        score);
+  }
+
   private static Optional<AthleteCandidate> toCandidate(JsonNode athleteNode, String query) {
     String athleteId = text(athleteNode, "id");
     if (athleteId == null) {
       return Optional.empty();
     }
 
-    String displayName =
-        firstText(athleteNode, "displayName", "fullName", "shortName", "name").orElse(null);
-    String firstName = text(athleteNode, "firstName");
-    String lastName = text(athleteNode, "lastName");
-    String position = nestedText(athleteNode, "position", "displayName", "abbreviation", "name");
-    String jerseyNumber = firstText(athleteNode, "jersey", "jerseyNumber").orElse(null);
-    String teamName = nestedText(athleteNode, "team", "displayName", "shortDisplayName", "name");
-    String teamId = nestedText(athleteNode, "team", "id");
-    Boolean active = athleteNode.hasNonNull("active") ? athleteNode.path("active").asBoolean() : null;
-
     double score = scoreCandidate(athleteNode, query);
     if (score < MIN_CANDIDATE_SCORE) {
       return Optional.empty();
     }
-
-    String resolvedDisplayName =
-        displayName != null ? displayName : buildDisplayName(firstName, lastName, athleteId);
-
-    return Optional.of(
-        new AthleteCandidate(
-            athleteId,
-            resolvedDisplayName,
-            firstName,
-            lastName,
-            position,
-            jerseyNumber,
-            teamName,
-            teamId,
-            active,
-            score));
+    return Optional.of(toCandidate(athleteNode, score));
   }
 
   private static double scoreCandidate(JsonNode athleteNode, String query) {
@@ -349,6 +353,86 @@ public final class EspnAthleteMapper {
     return null;
   }
 
+  private static String resolvePosition(JsonNode... nodes) {
+    for (JsonNode node : nodes) {
+      if (node == null || node.isNull() || node.isMissingNode()) {
+        continue;
+      }
+
+      JsonNode positionNode = node.path("position");
+      if (!positionNode.isMissingNode() && !positionNode.isNull()) {
+        String resolved = firstNonBlank(
+            text(positionNode, "abbreviation"),
+            text(positionNode, "shortDisplayName"),
+            text(positionNode, "displayName"),
+            text(positionNode, "name"),
+            text(positionNode, "value"));
+        if (resolved != null) {
+          return resolved;
+        }
+      }
+
+      String direct = firstNonBlank(text(node, "position"));
+      if (direct != null) {
+        return direct;
+      }
+    }
+
+    return null;
+  }
+
+  private static String resolveTeamName(JsonNode... nodes) {
+    for (JsonNode node : nodes) {
+      if (node == null || node.isNull() || node.isMissingNode()) {
+        continue;
+      }
+
+      JsonNode teamNode = node.path("team");
+      if (!teamNode.isMissingNode() && !teamNode.isNull()) {
+        String resolved =
+            firstNonBlank(
+                text(teamNode, "displayName"),
+                text(teamNode, "shortDisplayName"),
+                text(teamNode, "name"),
+                text(teamNode, "location"),
+                text(teamNode, "abbreviation"));
+        if (resolved != null) {
+          return resolved;
+        }
+      }
+
+      String direct = firstNonBlank(text(node, "team"));
+      if (direct != null) {
+        return direct;
+      }
+    }
+
+    return null;
+  }
+
+  private static String resolveTeamId(JsonNode... nodes) {
+    for (JsonNode node : nodes) {
+      if (node == null || node.isNull() || node.isMissingNode()) {
+        continue;
+      }
+
+      JsonNode teamNode = node.path("team");
+      if (!teamNode.isMissingNode() && !teamNode.isNull()) {
+        String resolved = firstNonBlank(text(teamNode, "id"));
+        if (resolved != null) {
+          return resolved;
+        }
+      }
+
+      String direct = firstNonBlank(text(node, "teamId"), text(node, "team_id"), text(node, "team"));
+      if (direct != null) {
+        return direct;
+      }
+    }
+
+    return null;
+  }
+
   private static Optional<String> firstText(JsonNode node, String... fields) {
     for (String field : fields) {
       String value = text(node, field);
@@ -366,6 +450,15 @@ public final class EspnAthleteMapper {
     }
     String text = value.asText(null);
     return text == null || text.isBlank() ? null : text;
+  }
+
+  private static String firstNonBlank(String... values) {
+    for (String value : values) {
+      if (value != null && !value.isBlank()) {
+        return value;
+      }
+    }
+    return null;
   }
 
   private static String requireText(JsonNode node, String field) {

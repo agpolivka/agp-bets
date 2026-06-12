@@ -5,10 +5,12 @@ import com.agp.bets.goforbroke.player.repository.PlayerRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Clock;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 @Service
 @Transactional
@@ -49,8 +51,7 @@ public class EspnPlayerIngestionService {
             .orElse(null);
 
     if (existingPlayer != null) {
-      queueBackgroundRefreshIfNeeded(existingPlayer);
-      return existingPlayer;
+      return loadOrRefreshPlayer(existingPlayer);
     }
 
     Player loadedPlayer = syncPlayerByName(playerName);
@@ -86,14 +87,39 @@ public class EspnPlayerIngestionService {
 
   @Transactional(readOnly = true)
   public Player getPlayerByEspnAthleteId(String athleteId) {
-    return playerRepository
-        .findByEspnAthleteId(athleteId)
-        .orElseThrow(() -> new IllegalStateException("No stored player found for ESPN athlete " + athleteId));
+    Player player =
+        playerRepository
+            .findByEspnAthleteId(athleteId)
+            .orElseThrow(() -> new IllegalStateException("No stored player found for ESPN athlete " + athleteId));
+    return loadOrRefreshPlayer(player);
   }
 
   @Transactional(readOnly = true)
   public boolean isPlayerStored(String athleteId) {
     return playerRepository.findByEspnAthleteId(athleteId).isPresent();
+  }
+
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  public PlayerMetadataBackfillResult backfillPlayerMetadata() {
+    List<Player> stalePlayers = playerRepository.findPlayersNeedingMetadataBackfill();
+    List<Player> refreshedPlayers = new ArrayList<>();
+    List<String> failedAthleteIds = new ArrayList<>();
+
+    for (Player player : stalePlayers) {
+      String athleteId = player.getEspnAthleteId();
+      if (athleteId == null || athleteId.isBlank()) {
+        continue;
+      }
+
+      try {
+        refreshedPlayers.add(syncPlayerByEspnAthleteId(athleteId));
+      } catch (RuntimeException exception) {
+        failedAthleteIds.add(athleteId);
+      }
+    }
+
+    return new PlayerMetadataBackfillResult(
+        stalePlayers.size(), refreshedPlayers, failedAthleteIds, clock.instant());
   }
 
   private void queueBackgroundRefreshIfNeeded(Player player) {
@@ -112,5 +138,29 @@ public class EspnPlayerIngestionService {
     }
 
     playerRefreshService.refreshPlayerByAthleteIdAsync(player.getEspnAthleteId());
+  }
+
+  private Player loadOrRefreshPlayer(Player player) {
+    if (needsImmediateRefresh(player)) {
+      return syncPlayerByEspnAthleteId(player.getEspnAthleteId());
+    }
+
+    queueBackgroundRefreshIfNeeded(player);
+    return player;
+  }
+
+  private boolean needsImmediateRefresh(Player player) {
+    if (player == null) {
+      return false;
+    }
+
+    if (player.getEspnAthleteId() == null || player.getEspnAthleteId().isBlank()) {
+      return false;
+    }
+
+    return player.getPosition() == null
+        || player.getPosition().isBlank()
+        || player.getTeamName() == null
+        || player.getTeamName().isBlank();
   }
 }

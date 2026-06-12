@@ -5,7 +5,7 @@ const state = {
   filteredPlayers: [],
   candidates: [],
   selectedPlayer: null,
-  selectedPlayerStats: [],
+  selectedInsights: null,
 };
 
 const elements = {
@@ -90,6 +90,44 @@ function summarizeValue(stat) {
     parts.push(`Snaps ${formatNumber(stat.snapCount)}`);
   }
   return parts.length ? parts.join(" · ") : "No summary available";
+}
+
+function compactSummaryValue(summary, key) {
+  if (!summary) {
+    return "—";
+  }
+
+  const value = summary[key];
+  if (value === null || value === undefined) {
+    return "—";
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? formatNumber(value) : value.toFixed(1);
+  }
+
+  return String(value);
+}
+
+function renderInsightSummaryCard(title, summary, metricKey, metricLabel, extraLabel) {
+  if (!summary) {
+    return `
+      <div class="summary-card empty">
+        <span class="summary-label">${escapeHtml(title)}</span>
+        <strong>—</strong>
+        <p>No data loaded yet.</p>
+      </div>
+    `;
+  }
+
+  const gamesLabel = summary.games ? `${summary.games} games` : "No games";
+  return `
+    <div class="summary-card">
+      <span class="summary-label">${escapeHtml(title)}</span>
+      <strong>${escapeHtml(compactSummaryValue(summary, metricKey))}</strong>
+      <p>${escapeHtml(metricLabel)} · ${escapeHtml(gamesLabel)}${extraLabel ? ` · ${escapeHtml(extraLabel)}` : ""}</p>
+    </div>
+  `;
 }
 
 function escapeHtml(value) {
@@ -270,7 +308,7 @@ function applyFilter() {
 
 function clearStatsPanel() {
   state.selectedPlayer = null;
-  state.selectedPlayerStats = [];
+  state.selectedInsights = null;
   elements.selectedPlayerName.textContent = "No player selected";
   elements.selectedPlayerMeta.textContent = "Choose a player from the stored list or sync a new one.";
   elements.recentGamesCount.textContent = "0";
@@ -292,82 +330,26 @@ function getStatModeLabel(player) {
   return "All offense";
 }
 
-function computeSummaryCards(stats, player) {
-  const recent = stats.slice(0, 5);
-  if (!recent.length) {
-    return [];
-  }
-
-  const sums = {
-    passingYards: 0,
-    rushingYards: 0,
-    receivingYards: 0,
-    totalTouchdowns: 0,
-    carries: 0,
-    receivingTargets: 0,
-    receptions: 0,
-    turnovers: 0,
-    snapCount: 0,
-  };
-
-  let countedGames = 0;
-  for (const stat of recent) {
-    countedGames += 1;
-    sums.passingYards += Number(stat.passingYards ?? 0);
-    sums.rushingYards += Number(stat.rushingYards ?? 0);
-    sums.receivingYards += Number(stat.receivingYards ?? 0);
-    sums.totalTouchdowns += Number(stat.totalTouchdowns ?? stat.touchdowns ?? 0);
-    sums.carries += Number(stat.carries ?? 0);
-    sums.receivingTargets += Number(stat.receivingTargets ?? 0);
-    sums.receptions += Number(stat.receptions ?? 0);
-    sums.turnovers += Number(stat.turnovers ?? 0);
-    sums.snapCount += Number(stat.snapCount ?? 0);
-  }
-
-  const mode = String(player?.position ?? "").toUpperCase();
-  const yards =
-    mode === "QB"
-      ? sums.passingYards + sums.rushingYards
-      : sums.receivingYards + sums.rushingYards;
-
-  return [
-    { label: "Last 5 games", value: `${countedGames}`, detail: "games loaded" },
-    { label: "Avg yards", value: formatNumber(Math.round(yards / countedGames)), detail: "combined production" },
-    { label: "Avg TDs", value: formatNumber((sums.totalTouchdowns / countedGames).toFixed(1)), detail: "last five" },
-    {
-      label: mode === "QB" ? "Avg turnovers" : "Targets / game",
-      value:
-        mode === "QB"
-          ? formatNumber((sums.turnovers / countedGames).toFixed(1))
-          : formatNumber((sums.receivingTargets / countedGames).toFixed(1)),
-      detail: mode === "QB" ? "last five" : "usage",
-    },
-    {
-      label: "Avg snaps",
-      value: formatNumber((sums.snapCount / countedGames).toFixed(1)),
-      detail: "last five",
-    },
-  ];
-}
-
-function renderSummaryCards(player, stats) {
-  const cards = computeSummaryCards(stats, player);
-  if (!cards.length) {
+function renderSummaryCards(insights) {
+  if (!insights) {
     elements.summaryCards.innerHTML = `<div class="summary-card empty">No game stats loaded for this player yet.</div>`;
     return;
   }
 
-  elements.summaryCards.innerHTML = cards
-    .map(
-      (card) => `
-        <div class="summary-card">
-          <span class="summary-label">${escapeHtml(card.label)}</span>
-          <strong>${escapeHtml(card.value)}</strong>
-          <p>${escapeHtml(card.detail)}</p>
-        </div>
-      `,
-    )
-    .join("");
+  const recentGameWindow = insights.recentGameWindow ?? 5;
+  const overall = insights.overallSummary;
+  const lastFive = insights.lastFiveSummary;
+  const lastThree = insights.lastThreeSummary;
+  const homeAway = insights.homeAwaySplits?.[0]?.summary ?? null;
+  const opponent = insights.opponentSplits?.[0]?.summary ?? null;
+
+  elements.summaryCards.innerHTML = [
+    renderInsightSummaryCard(`Last ${recentGameWindow} games`, lastFive, "games", "games loaded", "derived from stored logs"),
+    renderInsightSummaryCard("Season average yards", overall, "totalYardsPerGame", "combined yards per game", "overall"),
+    renderInsightSummaryCard("Last 3 yards", lastThree, "totalYardsPerGame", "combined yards per game", "recent form"),
+    renderInsightSummaryCard("Home split", homeAway, "totalYardsPerGame", "combined yards per game", "home/away"),
+    renderInsightSummaryCard("Top opponent", opponent, "totalYardsPerGame", "combined yards per game", "most frequent opponent"),
+  ].join("");
 }
 
 function renderStatsTable(stats) {
@@ -457,16 +439,34 @@ async function syncPlayerStats(athleteId) {
   return response.json();
 }
 
+async function loadPlayerInsights(athleteId) {
+  const response = await fetch(`${API_BASE}/api/players/${encodeURIComponent(athleteId)}/insights`);
+  if (!response.ok) {
+    throw new Error(`Failed to load player insights (${response.status})`);
+  }
+
+  return response.json();
+}
+
 async function showPlayerInsights(athleteId) {
   const player = findStoredPlayer(athleteId) ?? {
     espnAthleteId: athleteId,
   };
   setSelectedPlayer(player);
-  showMessage(`Loading stats for ${player.displayName ?? athleteId}...`);
-  const stats = await loadPlayerStats(athleteId);
-  state.selectedPlayerStats = stats;
-  renderSummaryCards(player, stats);
-  renderStatsTable(stats);
+  showMessage(`Loading insights for ${player.displayName ?? athleteId}...`);
+  const insights = await loadPlayerInsights(athleteId);
+  state.selectedInsights = insights;
+  renderSummaryCards(insights);
+  renderStatsTable(insights.recentGames ?? []);
+  elements.selectedPlayerName.textContent = insights.player?.displayName ?? player.displayName ?? "Unknown player";
+  elements.selectedPlayerMeta.textContent = [
+    insights.player?.teamName ?? player.teamName ?? "Free Agent",
+    insights.player?.position ?? player.position ?? "Unknown position",
+    insights.player?.espnAthleteId ?? athleteId,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  elements.summaryModeLabel.textContent = getStatModeLabel(insights.player ?? player);
   hideMessage();
 }
 

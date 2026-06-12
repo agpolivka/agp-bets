@@ -51,6 +51,7 @@ Goal: retrieve player data from the public API and persist it in PostgreSQL.
 - Add and refine the API client code in the backend
 - Create database entities and tables for players and stat records
 - Build an ingestion flow that can fetch, normalize, and save player data
+- Backfill missing player metadata like team, position, and active status
 - Add API endpoints to search and query stored players
 - Start with offensive players first: `QB`, `RB`, `WR`, and `TE`
 - Store game-level stat lines so future averages and splits can be computed from real history
@@ -150,11 +151,11 @@ Goal: turn the stored history into usable forecasting inputs.
 
 The immediate implementation priorities are:
 
-1. Keep player ingestion reliable.
-2. Make player search and sync flow smoothly from the frontend.
+1. Fix and backfill player team / position metadata so stored players stay trustworthy.
+2. Keep player ingestion reliable and easy to re-run.
 3. Build the game-level stat model for offensive players first.
 4. Add summary and split views that can power future betting and prediction logic.
-5. Prepare for historical backfill and refresh logic.
+5. Expand the player detail UI once the backend data is solid.
 
 The next major infrastructure step is Docker-based PostgreSQL so local development stays consistent and reproducible.
 
@@ -205,6 +206,32 @@ If you want to use different database settings, override these environment varia
 - `SPRING_DATASOURCE_URL`
 - `SPRING_DATASOURCE_USERNAME`
 - `SPRING_DATASOURCE_PASSWORD`
+
+### Maintenance endpoints
+
+The backend includes an admin-style metadata refresh endpoint for fixing stale player records:
+
+- `POST /api/players/backfill-metadata`
+
+This scans stored players that are missing team, position, team id, or active status, then refreshes them from ESPN and persists the updated values.
+
+### Player insights endpoint
+
+Derived player insights are computed from stored game logs rather than stored as a second source of truth.
+
+- `GET /api/players/{espnAthleteId}/insights`
+
+This returns:
+
+- the player record
+- recent game logs
+- overall stat summaries
+- last 5 game averages
+- last 3 game averages
+- home/away splits
+- opponent splits
+
+The important part is that the raw `player_game_stats` rows stay as the durable history, and the insights are calculated from those rows on demand.
 
 ## Notes
 

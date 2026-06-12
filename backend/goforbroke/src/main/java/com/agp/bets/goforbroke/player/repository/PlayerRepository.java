@@ -3,6 +3,7 @@ package com.agp.bets.goforbroke.player.repository;
 import com.agp.bets.goforbroke.player.domain.Player;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface PlayerRepository extends JpaRepository<Player, Long> {
@@ -12,4 +13,22 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
   Optional<Player> findFirstByDisplayNameIgnoreCase(String displayName);
 
   List<Player> findAllByOrderByDisplayNameAsc();
+
+  @Query(
+      """
+      select p
+      from Player p
+      where p.espnAthleteId is not null
+        and (
+          p.position is null
+          or p.position = ''
+          or p.teamName is null
+          or p.teamName = ''
+          or p.teamId is null
+          or p.teamId = ''
+          or p.active is null
+        )
+      order by p.displayName asc
+      """)
+  List<Player> findPlayersNeedingMetadataBackfill();
 }

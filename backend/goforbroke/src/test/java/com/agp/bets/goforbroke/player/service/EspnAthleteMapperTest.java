@@ -167,4 +167,41 @@ class EspnAthleteMapperTest {
     assertEquals("14", snapshot.teamId());
     assertEquals(Boolean.TRUE, snapshot.active());
   }
+
+  @Test
+  void mapsNestedAthleteProfileTeamAndPositionWhenOnlyAthleteObjectContainsThem() throws Exception {
+    JsonNode profileNode =
+        objectMapper.readTree(
+            """
+            {
+              "athlete": {
+                "id": "12483",
+                "displayName": "Matthew Stafford",
+                "firstName": "Matthew",
+                "lastName": "Stafford",
+                "jersey": "9",
+                "position": {
+                  "id": "8",
+                  "name": "Quarterback",
+                  "displayName": "Quarterback",
+                  "abbreviation": "QB"
+                },
+                "team": {
+                  "id": "14",
+                  "displayName": "Los Angeles Rams",
+                  "abbreviation": "LAR"
+                }
+              },
+              "active": true
+            }
+            """);
+
+    PlayerSnapshot snapshot =
+        EspnAthleteMapper.toSnapshot(
+            profileNode, "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/12483", Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals("QB", snapshot.position());
+    assertEquals("Los Angeles Rams", snapshot.teamName());
+    assertEquals("14", snapshot.teamId());
+  }
 }

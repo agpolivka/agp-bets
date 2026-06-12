@@ -102,6 +102,7 @@ public class EspnPlayerClient {
                 .thenComparing(AthleteCandidate::displayName, Comparator.nullsLast(String::compareToIgnoreCase))
                 .thenComparing(AthleteCandidate::espnAthleteId))
         .limit(requestedLimit)
+        .map(this::enrichCandidateFromAthleteDetails)
         .toList();
   }
 
@@ -116,6 +117,23 @@ public class EspnPlayerClient {
   public String buildAthleteGameLogUrl(String athleteId, String displayName) {
     String slug = slugify(displayName);
     return ATHLETE_GAME_LOG_PAGE + "/" + athleteId + "/" + slug;
+  }
+
+  private AthleteCandidate enrichCandidateFromAthleteDetails(AthleteCandidate candidate) {
+    if (candidate == null) {
+      return null;
+    }
+
+    if (candidate.position() != null && candidate.teamName() != null && candidate.teamId() != null) {
+      return candidate;
+    }
+
+    try {
+      JsonNode athlete = fetchAthleteById(candidate.espnAthleteId());
+      return EspnAthleteMapper.toCandidate(athlete, candidate.score());
+    } catch (EspnLookupException exception) {
+      return candidate;
+    }
   }
 
   private JsonNode fetchJson(String url) {

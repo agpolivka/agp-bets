@@ -3,6 +3,7 @@ package com.agp.bets.goforbroke.player.web;
 import com.agp.bets.goforbroke.player.domain.Player;
 import com.agp.bets.goforbroke.player.service.EspnPlayerIngestionService;
 import com.agp.bets.goforbroke.player.web.dto.PlayerCandidateResponse;
+import com.agp.bets.goforbroke.player.web.dto.PlayerMetadataBackfillResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerSyncResponse;
 import java.util.List;
@@ -50,5 +51,10 @@ public class PlayerController {
   public PlayerSyncResponse syncByAthleteId(@PathVariable String espnAthleteId) {
     Player player = ingestionService.syncPlayerByEspnAthleteId(espnAthleteId);
     return PlayerSyncResponse.from(player, "espnAthleteId", espnAthleteId);
+  }
+
+  @PostMapping("/backfill-metadata")
+  public PlayerMetadataBackfillResponse backfillMetadata() {
+    return PlayerMetadataBackfillResponse.from(ingestionService.backfillPlayerMetadata());
   }
 }
