@@ -233,6 +233,14 @@ This returns:
 
 The important part is that the raw `player_game_stats` rows stay as the durable history, and the insights are calculated from those rows on demand.
 
+### Player stats sync
+
+The stats sync flow now backfills historical game logs across multiple seasons when ESPN exposes them.
+
+- `POST /api/players/{espnAthleteId}/stats/sync`
+
+This refreshes stored game logs in an idempotent way by upserting game rows instead of deleting the history first.
+
 ## Notes
 
 - The project is intentionally being built in phases so the data model can mature before prediction work begins.

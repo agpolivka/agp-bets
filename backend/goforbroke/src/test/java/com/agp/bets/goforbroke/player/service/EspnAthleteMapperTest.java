@@ -89,6 +89,49 @@ class EspnAthleteMapperTest {
   }
 
   @Test
+  void prefersACloseFullNameOverSharedLastNameDecoys() throws Exception {
+    JsonNode root =
+        objectMapper.readTree(
+            """
+            {
+              "items": [
+                {
+                  "id": "1",
+                  "displayName": "Adam Terry",
+                  "firstName": "Adam",
+                  "lastName": "Terry"
+                },
+                {
+                  "id": "2",
+                  "displayName": "Chris Terry",
+                  "firstName": "Chris",
+                  "lastName": "Terry"
+                },
+                {
+                  "id": "3",
+                  "displayName": "Terry McLaurin",
+                  "firstName": "Terry",
+                  "lastName": "McLaurin"
+                },
+                {
+                  "id": "4",
+                  "displayName": "D.D. Terry",
+                  "firstName": "D.D.",
+                  "lastName": "Terry"
+                }
+              ]
+            }
+            """);
+
+    List<AthleteCandidate> candidates =
+        EspnAthleteMapper.findAthleteCandidates(root, "Terry McClaurin", 10);
+
+    assertEquals("3", candidates.get(0).espnAthleteId());
+    assertEquals("Terry McLaurin", candidates.get(0).displayName());
+    assertTrue(candidates.get(0).score() > candidates.get(1).score());
+  }
+
+  @Test
   void mapsAthleteNodeToPlayerSnapshot() throws Exception {
     JsonNode athleteNode =
         objectMapper.readTree(

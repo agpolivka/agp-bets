@@ -68,7 +68,7 @@ public class EspnPlayerIngestionService {
     AthleteCandidate candidate =
         espnPlayerClient
             .findBestAthleteCandidateByDisplayName(playerName)
-            .orElseThrow(() -> new IllegalStateException("No ESPN athlete found for " + playerName));
+            .orElseThrow(() -> new PlayerNotFoundException("No ESPN athlete found for " + playerName));
     JsonNode athleteNode = espnPlayerClient.fetchAthleteById(candidate.espnAthleteId());
     return playerUpsertService.upsertAthlete(
         athleteNode, espnPlayerClient.buildAthleteUrl(candidate.espnAthleteId()));
@@ -90,7 +90,7 @@ public class EspnPlayerIngestionService {
     Player player =
         playerRepository
             .findByEspnAthleteId(athleteId)
-            .orElseThrow(() -> new IllegalStateException("No stored player found for ESPN athlete " + athleteId));
+            .orElseThrow(() -> new PlayerNotFoundException("No stored player found for ESPN athlete " + athleteId));
     return loadOrRefreshPlayer(player);
   }
 

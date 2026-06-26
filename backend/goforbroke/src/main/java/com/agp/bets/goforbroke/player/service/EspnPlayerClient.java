@@ -49,11 +49,19 @@ public class EspnPlayerClient {
   }
 
   public JsonNode fetchAthleteStatisticsLog(String athleteId) {
-    return fetchJson(ATHLETE_STATISTICS_LOG_ENDPOINT + "/" + athleteId + "/statisticslog");
+    return fetchAthleteStatisticsLog(athleteId, null);
+  }
+
+  public JsonNode fetchAthleteStatisticsLog(String athleteId, Integer season) {
+    return fetchJson(buildAthleteStatisticsLogUrl(athleteId, season));
   }
 
   public String fetchAthleteGameLogPage(String athleteId, String displayName) {
-    return fetchText(buildAthleteGameLogUrl(athleteId, displayName));
+    return fetchAthleteGameLogPage(athleteId, displayName, null);
+  }
+
+  public String fetchAthleteGameLogPage(String athleteId, String displayName, Integer season) {
+    return fetchText(buildAthleteGameLogUrl(athleteId, displayName, season));
   }
 
   public Optional<JsonNode> findAthleteByDisplayName(String playerName) {
@@ -111,12 +119,28 @@ public class EspnPlayerClient {
   }
 
   public String buildAthleteStatisticsLogUrl(String athleteId) {
-    return ATHLETE_STATISTICS_LOG_ENDPOINT + "/" + athleteId + "/statisticslog";
+    return buildAthleteStatisticsLogUrl(athleteId, null);
+  }
+
+  public String buildAthleteStatisticsLogUrl(String athleteId, Integer season) {
+    String url = ATHLETE_STATISTICS_LOG_ENDPOINT + "/" + athleteId + "/statisticslog";
+    if (season != null) {
+      url += "?season=" + season;
+    }
+    return url;
   }
 
   public String buildAthleteGameLogUrl(String athleteId, String displayName) {
+    return buildAthleteGameLogUrl(athleteId, displayName, null);
+  }
+
+  public String buildAthleteGameLogUrl(String athleteId, String displayName, Integer season) {
     String slug = slugify(displayName);
-    return ATHLETE_GAME_LOG_PAGE + "/" + athleteId + "/" + slug;
+    String url = ATHLETE_GAME_LOG_PAGE + "/" + athleteId + "/" + slug;
+    if (season != null) {
+      url += "?season=" + season;
+    }
+    return url;
   }
 
   private AthleteCandidate enrichCandidateFromAthleteDetails(AthleteCandidate candidate) {

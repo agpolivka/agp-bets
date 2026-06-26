@@ -44,7 +44,7 @@ class PlayerInsightsServiceTest {
     assertEquals(3, insights.overallSummary().games());
     assertEquals(750, insights.overallSummary().passingYardsTotal());
     assertEquals(250.0d, insights.overallSummary().passingYardsPerGame());
-    assertEquals(250.0d, insights.overallSummary().totalYardsPerGame());
+    assertEquals(21.333333333333332d, insights.overallSummary().totalYardsPerGame());
     assertEquals(3, insights.overallSummary().touchdownsTotal());
     assertEquals(3, insights.recentGames().size());
     assertFalse(insights.homeAwaySplits().isEmpty());

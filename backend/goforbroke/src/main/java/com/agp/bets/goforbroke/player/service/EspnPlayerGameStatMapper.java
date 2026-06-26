@@ -111,23 +111,48 @@ public final class EspnPlayerGameStatMapper {
             .orElse(null);
 
     Integer season = firstInt(entry, "season", "seasonYear").orElse(null);
+    if (season == null) {
+      season = deriveSeasonFromGameDate(gameDate);
+    }
     Integer week = firstInt(entry, "week", "gameWeek", "period").orElse(null);
-    String homeAway = translateHomeAway(firstText(entry, "homeAway", "location", "venue").orElse(null),
-        nestedText(entry, "opp", "atVs").orElse(null));
+    String homeAway =
+        translateHomeAway(
+            firstText(entry, "homeAway", "location", "venue").orElse(null),
+            nestedText(entry, "opp", "atVs")
+                .orElseGet(() -> nestedText(entry, "event", "atVs").orElse(null)));
     String opponentName =
         firstText(entry, "opponentName", "opponent", "team", "opposingTeam")
             .orElseGet(
                 () ->
-                    nestedText(
-                        entry, "opp", "name", "displayName", "shortDisplayName", "abbreviation")
+                    nestedText(entry, "opp", "name", "displayName", "shortDisplayName", "abbreviation")
                         .orElseGet(
                             () ->
                                 nestedText(
-                                    entry, "opponent", "displayName", "shortDisplayName", "name", "abbreviation")
-                                    .orElse(null)));
+                                        entry,
+                                        "opponent",
+                                        "displayName",
+                                        "shortDisplayName",
+                                        "name",
+                                        "abbreviation")
+                                    .orElseGet(
+                                        () ->
+                                            nestedText(
+                                                    entry,
+                                                    "event",
+                                                    "name",
+                                                    "displayName",
+                                                    "shortDisplayName",
+                                                    "abbreviation")
+                                                .orElse(null))));
     String opponentTeamId =
         firstText(entry, "opponentTeamId", "opponentId", "teamId")
-            .orElseGet(() -> nestedText(entry, "opp", "id").orElseGet(() -> nestedText(entry, "opponent", "id").orElse(null)));
+            .orElseGet(
+                () ->
+                    nestedText(entry, "opp", "id")
+                        .orElseGet(
+                            () ->
+                                nestedText(entry, "opponent", "id")
+                                    .orElseGet(() -> nestedText(entry, "event", "id").orElse(null))));
 
     List<String> statValues = extractStatValues(entry.path("stats"));
     String inferredPosition = inferPosition(playerPosition, labels, statValues);
@@ -150,36 +175,35 @@ public final class EspnPlayerGameStatMapper {
     Integer drops = null;
 
     if (!statValues.isEmpty()) {
-      Map<String, String> statsByLabel = mapStatsByLabel(labels, statValues);
       if ("QB".equals(inferredPosition)) {
-        passingYards = intValue(statsByLabel, "YDS", 2);
-        rushingYards = intValue(statsByLabel, "YDS", 12);
-        passingTouchdowns = intValue(statsByLabel, "TD", 5);
-        rushingTouchdowns = intValue(statsByLabel, "TD", 14);
+        passingYards = statValue(labels, statValues, 1, "YDS");
+        rushingYards = statValue(labels, statValues, 2, "YDS");
+        passingTouchdowns = statValue(labels, statValues, 1, "TD");
+        rushingTouchdowns = statValue(labels, statValues, 2, "TD");
         touchdowns = sumIntegers(passingTouchdowns, rushingTouchdowns);
-        interceptions = intValue(statsByLabel, "INT", 6);
-        carries = intValue(statsByLabel, "CAR", 11);
+        interceptions = statValue(labels, statValues, 1, "INT");
+        carries = statValue(labels, statValues, 1, "CAR");
       } else if ("RB".equals(inferredPosition)) {
-        carries = intValue(statsByLabel, "CAR", 0);
-        rushingYards = intValue(statsByLabel, "YDS", 1);
-        rushingTouchdowns = intValue(statsByLabel, "TD", 3);
-        receptions = intValue(statsByLabel, "REC", 5);
-        receivingTargets = intValue(statsByLabel, "TGTS", 6);
-        receivingYards = intValue(statsByLabel, "YDS", 7);
-        receivingTouchdowns = intValue(statsByLabel, "TD", 9);
-        fumbles = intValue(statsByLabel, "FUM", 11);
-        fumblesLost = intValue(statsByLabel, "LST", 12);
+        carries = statValue(labels, statValues, 1, "CAR");
+        rushingYards = statValue(labels, statValues, 1, "YDS");
+        rushingTouchdowns = statValue(labels, statValues, 1, "TD");
+        receptions = statValue(labels, statValues, 1, "REC", "RECEPTIONS");
+        receivingTargets = statValue(labels, statValues, 1, "TGTS", "TARGETS");
+        receivingYards = statValue(labels, statValues, 2, "YDS");
+        receivingTouchdowns = statValue(labels, statValues, 2, "TD");
+        fumbles = statValue(labels, statValues, 1, "FUM", "FUMBLES");
+        fumblesLost = statValue(labels, statValues, 1, "LST", "FUM LOST", "FUMBLES LOST");
         touchdowns = sumIntegers(rushingTouchdowns, receivingTouchdowns);
       } else {
-        receptions = intValue(statsByLabel, "REC", 0);
-        receivingTargets = intValue(statsByLabel, "TGTS", 1);
-        receivingYards = intValue(statsByLabel, "YDS", 2);
-        receivingTouchdowns = intValue(statsByLabel, "TD", 4);
-        carries = intValue(statsByLabel, "CAR", 6);
-        rushingYards = intValue(statsByLabel, "YDS", 7);
-        rushingTouchdowns = intValue(statsByLabel, "TD", 9);
-        fumbles = intValue(statsByLabel, "FUM", 11);
-        fumblesLost = intValue(statsByLabel, "LST", 12);
+        receptions = statValue(labels, statValues, 1, "REC", "RECEPTIONS");
+        receivingTargets = statValue(labels, statValues, 1, "TGTS", "TARGETS");
+        receivingYards = statValue(labels, statValues, 1, "YDS");
+        receivingTouchdowns = statValue(labels, statValues, 1, "TD");
+        carries = statValue(labels, statValues, 1, "CAR", "CARRIES");
+        rushingYards = statValue(labels, statValues, 2, "YDS");
+        rushingTouchdowns = statValue(labels, statValues, 2, "TD");
+        fumbles = statValue(labels, statValues, 1, "FUM", "FUMBLES");
+        fumblesLost = statValue(labels, statValues, 1, "LST", "FUM LOST", "FUMBLES LOST");
         touchdowns = sumIntegers(receivingTouchdowns, rushingTouchdowns);
       }
     }
@@ -215,7 +239,7 @@ public final class EspnPlayerGameStatMapper {
       fumblesLost = firstInt(entry, "fumblesLost", "lostFumbles").orElse(null);
     }
     if (snapCount == null) {
-      snapCount = firstInt(entry, "snapCount", "snaps").orElse(null);
+      snapCount = statValue(labels, statValues, 1, "SNAP", "SNAPS", "SNAPCOUNT", "SNAP COUNT", "SNP");
     }
     if (carries == null) {
       carries = firstInt(entry, "carries", "rushAttempts", "rushingAttempts", "attempts").orElse(null);
@@ -227,14 +251,16 @@ public final class EspnPlayerGameStatMapper {
       receptions = firstInt(entry, "receptions", "catches").orElse(null);
     }
     if (drops == null) {
+      drops = statValue(labels, statValues, 1, "DROP", "DROPS");
+    }
+    if (drops == null) {
       drops = firstInt(entry, "drops").orElse(null);
     }
 
     Integer totalYards =
         coalesce(
-            firstInt(entry, "totalYards", "yards").orElse(null),
-            sumIntegers(passingYards, rushingYards),
-            sumIntegers(receivingYards, rushingYards));
+            sumIntegers(passingYards, rushingYards, receivingYards),
+            firstInt(entry, "totalYards", "yards").orElse(null));
 
     Integer totalTouchdowns =
         coalesce(
@@ -277,39 +303,125 @@ public final class EspnPlayerGameStatMapper {
 
   private static List<JsonNode> collectEntries(JsonNode root) {
     List<JsonNode> entries = new ArrayList<>();
+    collectEntriesRecursive(root, entries, 0);
+    return entries;
+  }
 
-    JsonNode groups = root.get("groups");
-    if (groups != null && groups.isArray()) {
-      for (JsonNode group : groups) {
-        JsonNode tables = group.path("tbls");
-        if (tables.isArray()) {
-          for (JsonNode table : tables) {
-            JsonNode events = table.path("events");
-            if (events.isArray()) {
-              events.forEach(entries::add);
-            }
-          }
+  private static void collectEntriesRecursive(JsonNode node, List<JsonNode> entries, int depth) {
+    if (node == null || node.isNull() || depth > 12) {
+      return;
+    }
+
+    if (looksLikeGameEntry(node)) {
+      entries.add(node);
+      return;
+    }
+
+    if (node.isArray()) {
+      for (JsonNode child : node) {
+        collectEntriesRecursive(child, entries, depth + 1);
+      }
+      return;
+    }
+
+    if (!node.isObject()) {
+      return;
+    }
+
+    for (Iterator<Map.Entry<String, JsonNode>> fields = node.fields(); fields.hasNext(); ) {
+      Map.Entry<String, JsonNode> field = fields.next();
+      String name = field.getKey();
+      JsonNode value = field.getValue();
+      if (value == null || value.isNull()) {
+        continue;
+      }
+
+      if (isEntryContainerField(name)) {
+        collectEntriesRecursive(value, entries, depth + 1);
+        continue;
+      }
+
+      if (value.isArray() || value.isObject()) {
+        collectEntriesRecursive(value, entries, depth + 1);
+      }
+    }
+  }
+
+  private static boolean isEntryContainerField(String fieldName) {
+    if (fieldName == null) {
+      return false;
+    }
+
+    return switch (fieldName) {
+      case "groups", "tbls", "events", "items", "splits", "statistics", "logs", "games", "entries" -> true;
+      default -> false;
+    };
+  }
+
+  private static boolean looksLikeGameEntry(JsonNode node) {
+    if (node == null || !node.isObject()) {
+      return false;
+    }
+
+    boolean hasStats = node.has("stats");
+    if (!hasStats) {
+      return false;
+    }
+
+    boolean hasDirectContext =
+        node.has("date")
+            || node.has("dt")
+            || node.has("gameDate")
+            || node.has("playedOn")
+            || node.has("startDate")
+            || node.has("opp")
+            || node.has("opponent")
+            || node.has("opponentName")
+            || node.has("team")
+            || node.has("week")
+            || node.has("season");
+
+    return hasDirectContext || hasNestedGameContext(node, 0);
+  }
+
+  private static boolean hasNestedGameContext(JsonNode node, int depth) {
+    if (node == null || node.isNull() || depth > 4) {
+      return false;
+    }
+
+    if (node.isObject()) {
+      if (node.has("date")
+          || node.has("dt")
+          || node.has("gameDate")
+          || node.has("playedOn")
+          || node.has("startDate")
+          || node.has("opp")
+          || node.has("opponent")
+          || node.has("opponentName")
+          || node.has("team")
+          || node.has("week")
+          || node.has("season")) {
+        return true;
+      }
+
+      for (Iterator<Map.Entry<String, JsonNode>> fields = node.fields(); fields.hasNext(); ) {
+        Map.Entry<String, JsonNode> field = fields.next();
+        if (hasNestedGameContext(field.getValue(), depth + 1)) {
+          return true;
         }
       }
-      if (!entries.isEmpty()) {
-        return entries;
+      return false;
+    }
+
+    if (node.isArray()) {
+      for (JsonNode child : node) {
+        if (hasNestedGameContext(child, depth + 1)) {
+          return true;
+        }
       }
     }
 
-    for (String field : List.of("items", "splits", "statistics", "logs", "games", "entries")) {
-      JsonNode child = root.get(field);
-      if (child != null && child.isArray() && !child.isEmpty()) {
-        child.forEach(entries::add);
-        return entries;
-      }
-    }
-
-    if (root.isArray()) {
-      root.forEach(entries::add);
-      return entries;
-    }
-
-    return List.of();
+    return false;
   }
 
   private static Optional<String> firstText(JsonNode node, String... aliases) {
@@ -668,6 +780,101 @@ public final class EspnPlayerGameStatMapper {
     } catch (NumberFormatException exception) {
       return null;
     }
+  }
+
+  private static Integer statValue(
+      JsonNode labelsNode, List<String> values, int occurrence, String... aliases) {
+    if (labelsNode == null || !labelsNode.isArray() || values == null || occurrence <= 0) {
+      return null;
+    }
+
+    int matches = 0;
+    int limit = Math.min(labelsNode.size(), values.size());
+    for (int index = 0; index < limit; index++) {
+      JsonNode labelNode = labelsNode.get(index);
+      if (!labelMatches(labelNode, aliases)) {
+        continue;
+      }
+
+      matches++;
+      if (matches != occurrence) {
+        continue;
+      }
+
+      String rawValue = values.get(index);
+      if (rawValue == null || rawValue.isBlank()) {
+        return null;
+      }
+
+      try {
+        return Integer.parseInt(rawValue.replace(",", "").trim());
+      } catch (NumberFormatException exception) {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  private static boolean labelMatches(JsonNode labelNode, String... aliases) {
+    if (labelNode == null || labelNode.isNull() || aliases == null || aliases.length == 0) {
+      return false;
+    }
+
+    for (String candidateField : List.of("data", "abbreviation", "shortDisplayName", "displayName", "name", "label", "text")) {
+      String candidate = normalizeLabelText(labelNode.path(candidateField).asText(null));
+      if (candidate.isBlank()) {
+        continue;
+      }
+
+      for (String alias : aliases) {
+        String normalizedAlias = normalizeLabelText(alias);
+        if (matchesNormalizedLabel(candidate, normalizedAlias)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private static boolean matchesNormalizedLabel(String candidate, String alias) {
+    if (candidate == null || candidate.isBlank() || alias == null || alias.isBlank()) {
+      return false;
+    }
+
+    if (candidate.equals(alias)) {
+      return true;
+    }
+
+    if (candidate.endsWith("S") && candidate.substring(0, candidate.length() - 1).equals(alias)) {
+      return true;
+    }
+
+    if (alias.endsWith("S") && alias.substring(0, alias.length() - 1).equals(candidate)) {
+      return true;
+    }
+
+    return candidate.contains(alias) || alias.contains(candidate);
+  }
+
+  private static String normalizeLabelText(String raw) {
+    if (raw == null) {
+      return "";
+    }
+    return raw.replaceAll("[^A-Za-z0-9]", "").toUpperCase(java.util.Locale.ROOT);
+  }
+
+  private static Integer deriveSeasonFromGameDate(LocalDate gameDate) {
+    if (gameDate == null) {
+      return null;
+    }
+
+    int month = gameDate.getMonthValue();
+    if (month <= 2) {
+      return gameDate.getYear() - 1;
+    }
+    return gameDate.getYear();
   }
 
   private static String inferPosition(String playerPosition, JsonNode labelsNode, List<String> statValues) {

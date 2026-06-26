@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Clock;
 import java.time.Instant;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,11 +31,22 @@ public class PlayerUpsertService {
     Instant now = clock.instant();
     PlayerSnapshot snapshot = EspnAthleteMapper.toSnapshot(athleteNode, sourceUrl, now);
 
-    Player player =
-        playerRepository
-            .findByEspnAthleteId(snapshot.espnAthleteId())
-            .orElseGet(Player::new);
+    try {
+      Player player =
+          playerRepository
+              .findByEspnAthleteId(snapshot.espnAthleteId())
+              .orElseGet(Player::new);
+      return saveSnapshot(player, snapshot, now);
+    } catch (DataIntegrityViolationException exception) {
+      Player existingPlayer =
+          playerRepository
+              .findByEspnAthleteId(snapshot.espnAthleteId())
+              .orElseThrow(() -> exception);
+      return saveSnapshot(existingPlayer, snapshot, now);
+    }
+  }
 
+  private Player saveSnapshot(Player player, PlayerSnapshot snapshot, Instant now) {
     boolean isNew = player.getId() == null;
 
     player.setEspnAthleteId(snapshot.espnAthleteId());

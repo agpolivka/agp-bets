@@ -136,25 +136,28 @@ public final class EspnAthleteMapper {
   }
 
   private static double scoreCandidate(JsonNode athleteNode, String query) {
-    Set<String> candidateTerms = new HashSet<>();
-    firstText(athleteNode, "displayName", "fullName", "shortName", "name")
-        .ifPresent(candidateTerms::add);
-    firstText(athleteNode, "firstName").ifPresent(candidateTerms::add);
-    firstText(athleteNode, "lastName").ifPresent(candidateTerms::add);
-
     String firstName = text(athleteNode, "firstName");
     String lastName = text(athleteNode, "lastName");
-    if (firstName != null && lastName != null) {
-      candidateTerms.add(firstName + " " + lastName);
-      candidateTerms.add(lastName + " " + firstName);
-    }
+    String displayName =
+        firstText(athleteNode, "displayName", "fullName", "shortName", "name").orElse(null);
 
-    double bestScore = 0.0d;
-    for (String candidateTerm : candidateTerms) {
-      bestScore = Math.max(bestScore, scoreText(query, normalize(candidateTerm)));
-    }
+    double displayScore = scoreText(query, normalize(displayName));
+    double tokenSortScore = tokenSortScore(query, displayName);
+    double firstNameScore = scoreText(queryFirstToken(query), normalize(firstName));
+    double lastNameScore = scoreText(queryLastToken(query), normalize(lastName));
+    double namePairScore =
+        scoreText(
+            query,
+            normalize(buildNamePair(firstName, lastName)));
 
-    return bestScore;
+    double weightedScore =
+        (0.40d * displayScore)
+            + (0.25d * tokenSortScore)
+            + (0.20d * lastNameScore)
+            + (0.10d * firstNameScore)
+            + (0.05d * namePairScore);
+
+    return Math.max(weightedScore, Math.max(displayScore, tokenSortScore));
   }
 
   private static double scoreText(String query, String candidate) {
@@ -197,6 +200,15 @@ public final class EspnAthleteMapper {
     }
 
     return (double) matches / Math.max(queryTokens.length, candidateTokens.length);
+  }
+
+  private static double tokenSortScore(String query, String candidate) {
+    String sortedQuery = sortTokens(query);
+    String sortedCandidate = sortTokens(candidate);
+    if (sortedQuery.isBlank() || sortedCandidate.isBlank()) {
+      return 0.0d;
+    }
+    return scoreText(sortedQuery, sortedCandidate);
   }
 
   private static double normalizedLevenshteinScore(String left, String right) {
@@ -242,6 +254,17 @@ public final class EspnAthleteMapper {
     }
 
     return normalized.split("\\s+");
+  }
+
+  private static String sortTokens(String value) {
+    String[] tokens = tokenize(value);
+    if (tokens.length == 0) {
+      return "";
+    }
+
+    List<String> sorted = new java.util.ArrayList<>(List.of(tokens));
+    sorted.sort(String::compareTo);
+    return String.join(" ", sorted);
   }
 
   private static String compact(String value) {
@@ -461,6 +484,29 @@ public final class EspnAthleteMapper {
     return null;
   }
 
+  private static String queryFirstToken(String query) {
+    String[] tokens = tokenize(query);
+    return tokens.length == 0 ? null : tokens[0];
+  }
+
+  private static String queryLastToken(String query) {
+    String[] tokens = tokenize(query);
+    return tokens.length == 0 ? null : tokens[tokens.length - 1];
+  }
+
+  private static String buildNamePair(String firstName, String lastName) {
+    if (firstName == null && lastName == null) {
+      return null;
+    }
+    if (firstName == null) {
+      return lastName;
+    }
+    if (lastName == null) {
+      return firstName;
+    }
+    return firstName + " " + lastName;
+  }
+
   private static String requireText(JsonNode node, String field) {
     String value = text(node, field);
     if (value == null) {
@@ -470,6 +516,10 @@ public final class EspnAthleteMapper {
   }
 
   private static String normalize(String value) {
+    if (value == null) {
+      return "";
+    }
+
     return value.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
   }
 

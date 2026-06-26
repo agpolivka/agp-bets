@@ -16,6 +16,7 @@ $frontendErrLog = Join-Path $devDir "frontend.err.log"
 $backendPidFile = Join-Path $devDir "backend.pid"
 $frontendPidFile = Join-Path $devDir "frontend.pid"
 $backendWrapper = Join-Path $backendDir "mvnw.cmd"
+$frontendPackageJson = Join-Path $frontendDir "package.json"
 
 function Test-PortInUse {
   param(
@@ -38,6 +39,10 @@ if (Test-PortInUse -Port $FrontendPort) {
   throw "Port $FrontendPort is already in use. Stop the existing frontend before running start-dev again."
 }
 
+if (-not (Test-Path $frontendPackageJson)) {
+  throw "Frontend package.json was not found. The React/Vite frontend needs to be scaffolded before start-dev can launch it."
+}
+
 New-Item -ItemType Directory -Force -Path $devDir | Out-Null
 Remove-Item -ErrorAction SilentlyContinue `
   $backendOutLog, $backendErrLog, $frontendOutLog, $frontendErrLog, $backendPidFile, $frontendPidFile
@@ -58,8 +63,8 @@ $backendProcess.Id | Set-Content $backendPidFile
 
 Write-Host "Starting frontend on port $FrontendPort..." -ForegroundColor Cyan
 $frontendProcess = Start-Process `
-  -FilePath "py" `
-  -ArgumentList "-3", "-m", "http.server", "$FrontendPort" `
+  -FilePath "cmd.exe" `
+  -ArgumentList "/c", "npm.cmd run dev -- --host 127.0.0.1 --port $FrontendPort" `
   -WorkingDirectory $frontendDir `
   -WindowStyle Hidden `
   -RedirectStandardOutput $frontendOutLog `

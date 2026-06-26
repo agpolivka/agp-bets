@@ -41,7 +41,7 @@ public class PlayerInsightsService {
         playerRepository
             .findByEspnAthleteId(athleteId)
             .orElseThrow(
-                () -> new IllegalStateException("No stored player found for ESPN athlete " + athleteId));
+                () -> new PlayerNotFoundException("No stored player found for ESPN athlete " + athleteId));
 
     List<PlayerGameStat> stats = playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
     List<PlayerGameStat> recentStats = stats.stream().limit(DEFAULT_RECENT_GAME_WINDOW).toList();
