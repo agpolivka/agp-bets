@@ -9,6 +9,8 @@ The project now has a real React/Vite frontend, dedicated player pages, automati
 hydration, automatic stat sync on page load, and player headshots on the detail screen.
 The next session should focus on improving the quality of derived insights, cleaning up
 what information is displayed, and continuing to harden historical stat freshness.
+The premium or special-user layer should remain a future phase, after the derived-stat
+experience is strong enough to justify it.
 
 ## Recently Completed
 
@@ -25,6 +27,11 @@ what information is displayed, and continuing to harden historical stat freshnes
   - hidden confidence score
   - no-result guidance when no strong match is found
 - Added ESPN player headshots with a safe initials fallback.
+- Started the backend team-data foundation:
+  - new `Team` storage for identity, branding, venue, and record context
+  - new `TeamDefenseGameStat` storage for game-level defensive results
+  - admin sync endpoints for direct team sync and syncing teams linked to stored players
+  - upcoming opponent lookup support now feeding player insights
 
 ## Priority 1: Derived Stats and Insights Cleanup
 
@@ -36,6 +43,7 @@ Desired behavior:
 - Make sure the top summary cards are meaningful across QB, RB, WR, and TE.
 - Add stronger last-X-game views, home/away splits, opponent splits, and trend summaries.
 - Keep raw game stats as the source of truth and derive everything cleanly on top.
+- Add more matchup-aware derived views that can later support premium-only insights.
 
 Implementation ideas:
 
@@ -46,7 +54,24 @@ Implementation ideas:
   - WR/TE target, reception, and yardage summaries
 - Add clearer role-aware insight cards instead of one generic layout for every position.
 
-## Priority 2: Clean Up Displayed Information
+## Priority 2: Historical Backfill and Stat Freshness
+
+Goal: keep expanding historical player data and keep it current without overloading ESPN.
+
+Desired behavior:
+
+- Backfill more player game history when available.
+- Make sure player stats are updated reliably over time.
+- Keep automatic refresh behavior safe and predictable.
+- Continue improving the historical sample for future derived insights.
+
+Implementation ideas:
+
+- Improve the season and game-log backfill strategy.
+- Add a better scheduled/admin refresh path for old and new stat lines.
+- Preserve raw game stats as the source of truth and derive insights from them.
+
+## Priority 3: Clean Up Displayed Information
 
 Goal: make the player page show the right information in the right places without noise.
 
@@ -64,23 +89,6 @@ Implementation ideas:
 - Trim fields that are technically present but not useful yet.
 - Continue moving the app away from a database-viewer feel.
 
-## Priority 3: Historical Backfill and Stat Freshness
-
-Goal: keep expanding historical player data and keep it current without overloading ESPN.
-
-Desired behavior:
-
-- Backfill more player game history when available.
-- Make sure player stats are updated reliably over time.
-- Keep automatic refresh behavior safe and predictable.
-- Continue improving the historical sample for future derived insights.
-
-Implementation ideas:
-
-- Improve the season and game-log backfill strategy.
-- Add a better scheduled/admin refresh path for old and new stat lines.
-- Preserve raw game stats as the source of truth and derive insights from them.
-
 ## Priority 4: Team Identity and Visuals
 
 Goal: round out player pages with team-aware visuals once team data is modeled more cleanly.
@@ -97,7 +105,35 @@ Implementation ideas:
 - Avoid stuffing long-term team concerns directly into player-only components.
 - Reuse the current player visual card once team branding is ready.
 
-## Priority 5: Candidate Matching Cleanup
+## Priority 5: Team Defense Data Foundation
+
+Goal: store enough team and defense history to support matchup-driven player insights and later predictions.
+
+Desired behavior:
+
+- Store core team identity data:
+  - team name
+  - team logo
+  - location
+  - stadium details including indoor/outdoor
+  - record and standings summary
+- Store defensive game history in a form we can derive from later.
+- Keep team data modeled separately from player data, while still making it easy for player insights to look up opponents.
+- Leave room for weekly and season-level defensive rankings later.
+
+Implementation ideas:
+
+- Use `Team` for identity and branding data.
+- Use `TeamDefenseGameStat` as the source of truth for defensive history.
+- Derive defensive season totals and matchup summaries from stored game rows rather than storing every aggregate up front.
+- Add follow-up work for:
+  - weekly defensive rank calculations
+  - season aggregate defensive views
+  - team logos on player pages
+  - investigating whether defensive scheme is available anywhere reliable
+  - revisiting receiving-yards-allowed if ESPN exposes a better source than team passing totals
+
+## Priority 6: Candidate Matching Cleanup
 
 Goal: keep search results tight and typo-tolerant as usage grows.
 
@@ -115,6 +151,24 @@ Implementation ideas:
 - Keep search output clean and player-centric.
 - Preserve typo tolerance without overwhelming the user with low-quality matches.
 
+## Priority 7: Performance and Responsiveness
+
+Goal: make the app feel fast, especially for the two hottest user paths.
+
+Desired behavior:
+
+- Player searches should return quickly and feel responsive.
+- Player detail loading should avoid unnecessary waiting when data is already available.
+- Background hydration should not block the user experience.
+- We should keep an eye on performance as derived stats and more data sources are added.
+
+Implementation ideas:
+
+- Add or tune caching for common player lookups and search results.
+- Reduce repeated backend calls during a single player page load.
+- Make background refresh behavior more incremental where possible.
+- Revisit slow queries or joins if player search or page load starts lagging.
+
 ## Longer-Term Direction
 
 - Add richer player trend and split views.
@@ -122,6 +176,10 @@ Implementation ideas:
 - Introduce caching for common lookups.
 - Build prediction-ready features from the stored history.
 - Expand from player analysis into team-level analysis later.
+- Add premium-user-only derived views once the public experience is stable.
+- Replace Hibernate-only schema generation with Flyway once the team tables and next database changes settle down.
+- After team data modeling is in place, introduce Flyway migrations and move away from
+  relying on Hibernate schema creation as the long-term database strategy.
 
 ## Working Agreement
 

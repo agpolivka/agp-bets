@@ -85,7 +85,6 @@ public class EspnPlayerIngestionService {
     return playerRepository.findAllByOrderByDisplayNameAsc();
   }
 
-  @Transactional(readOnly = true)
   public Player getPlayerByEspnAthleteId(String athleteId) {
     Player player =
         playerRepository
@@ -142,7 +141,8 @@ public class EspnPlayerIngestionService {
 
   private Player loadOrRefreshPlayer(Player player) {
     if (needsImmediateRefresh(player)) {
-      return syncPlayerByEspnAthleteId(player.getEspnAthleteId());
+      queueBackgroundRefresh(player);
+      return player;
     }
 
     queueBackgroundRefreshIfNeeded(player);

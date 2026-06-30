@@ -55,6 +55,14 @@ export function getPlayerInsights(athleteId) {
   return request(`/api/players/${encodeURIComponent(athleteId)}/insights`);
 }
 
+export function getTeam(teamId) {
+  return request(`/api/teams/${encodeURIComponent(teamId)}`);
+}
+
+export function getTeamDefenseSummary(teamId) {
+  return request(`/api/teams/${encodeURIComponent(teamId)}/defense-summary`);
+}
+
 export function syncPlayerStats(athleteId) {
   return request(`/api/players/${encodeURIComponent(athleteId)}/stats/sync`, {
     method: "POST",

@@ -16,6 +16,16 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
 
   @Query(
       """
+      select distinct p.teamId
+      from Player p
+      where p.teamId is not null
+        and p.teamId <> ''
+      order by p.teamId asc
+      """)
+  List<String> findDistinctTeamIds();
+
+  @Query(
+      """
       select p
       from Player p
       where p.espnAthleteId is not null

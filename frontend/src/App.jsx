@@ -1,18 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  BrowserRouter,
-  Link,
-  Route,
-  Routes,
-  useLocation,
-  useNavigate,
-  useParams,
-} from "react-router-dom";
+import { useEffect, useState } from "react";
+import { BrowserRouter, Link, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { featuredPlayers } from "./data/featuredPlayers";
 import {
-  checkBackend,
   getPlayer,
   getPlayerInsights,
+  getTeam,
+  getTeamDefenseSummary,
   searchPlayers,
   syncPlayerByAthleteId,
   syncPlayerStats,
@@ -20,6 +13,8 @@ import {
 
 const SEARCH_RESULT_LIMIT = 5;
 const SEARCH_RESULT_THRESHOLD = 0.25;
+const MATCHUP_RETRY_ATTEMPTS = 2;
+const MATCHUP_RETRY_DELAY_MS = 1500;
 
 function buildEspnHeadshotUrl(athleteId) {
   if (!athleteId) {
@@ -44,8 +39,9 @@ function getPlayerInitials(displayName) {
 
 function formatNumber(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "—";
+    return "-";
   }
+
   return new Intl.NumberFormat().format(Number(value));
 }
 
@@ -82,23 +78,91 @@ function formatShortDate(value) {
   });
 }
 
+function formatLongDate(value) {
+  if (!value) {
+    return "Unknown date";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown date";
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function formatPace(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "—";
+    return "-";
   }
 
   return Number(value).toFixed(1);
 }
 
-function summarizeGame(stat) {
-  const yards =
-    (stat.passingYards ?? 0) + (stat.rushingYards ?? 0) + (stat.receivingYards ?? 0);
+function formatNullablePace(value, suffix = "") {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "-";
+  }
+
+  return `${Number(value).toFixed(1)}${suffix}`;
+}
+
+function formatDefenseRankLabel(opponentDefense) {
+  if (!opponentDefense) {
+    return null;
+  }
 
   return [
-    `Yds ${formatNumber(yards)}`,
-    `TD ${formatNumber(stat.totalTouchdowns ?? stat.touchdowns ?? 0)}`,
-    `TO ${formatNumber(stat.turnovers ?? 0)}`,
-  ].join(" · ");
+    `${formatNullablePace(opponentDefense.totalYardsAllowedPerGame, " yds allowed/g")}`,
+    `${formatNullablePace(opponentDefense.pointsAllowedPerGame, " pts allowed/g")}`,
+    `${formatNullablePace(opponentDefense.turnoversForcedPerGame, " to forced/g")}`,
+  ].join(" | ");
+}
+
+function getRecentMatchupLabel(summary) {
+  const games = summary?.games ?? 0;
+  if (games <= 0) {
+    return "Recent matchups";
+  }
+
+  if (games === 1) {
+    return "Last matchup";
+  }
+
+  if (games < 3) {
+    return `Last ${games} matchups`;
+  }
+
+  return "Last 3 matchups";
+}
+
+function summarizeGame(stat, playerPosition) {
+  const isQuarterback = (playerPosition ?? "").trim().toUpperCase() === "QB";
+  const passingYards = stat.passingYards ?? 0;
+  const rushingYards = stat.rushingYards ?? 0;
+  const receivingYards = stat.receivingYards ?? 0;
+
+  if (isQuarterback) {
+    return [
+      `Pass ${formatNumber(passingYards)} yds`,
+      `Rush ${formatNumber(rushingYards)} yds`,
+    ].join(" | ");
+  }
+
+  return [
+    `Rec ${formatNumber(receivingYards)} yds`,
+    `Rush ${formatNumber(rushingYards)} yds`,
+  ].join(" | ");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function normalizeCandidateResults(results) {
@@ -108,15 +172,7 @@ function normalizeCandidateResults(results) {
     .slice(0, SEARCH_RESULT_LIMIT);
 }
 
-function StatusPill({ backendStatus }) {
-  return (
-    <span className={`status-pill ${backendStatus === "Backend online" ? "live" : "offline"}`}>
-      {backendStatus}
-    </span>
-  );
-}
-
-function AppShell({ backendStatus, children }) {
+function AppShell({ children }) {
   return (
     <div className="page-shell">
       <div className="background background-left" />
@@ -132,7 +188,6 @@ function AppShell({ backendStatus, children }) {
         </Link>
 
         <div className="topbar-actions">
-          <StatusPill backendStatus={backendStatus} />
           <nav className="topnav" aria-label="Primary">
             <Link to="/">Search</Link>
             <a href="#featured">Featured</a>
@@ -158,19 +213,18 @@ function SearchResultCard({ player }) {
       </div>
 
       <p>
-        {player.teamName ?? "Unknown team"} · {player.position ?? "Unknown position"}
+        {player.teamName ?? "Unknown team"} | {player.position ?? "Unknown position"}
       </p>
 
       <div className="result-meta">
         <span>{player.espnAthleteId ?? "No ESPN ID"}</span>
-        <span>{player.stored ? "Stored already" : "Needs sync"}</span>
+        <span>{player.stored ? "Stored already" : "Ready to load"}</span>
       </div>
     </Link>
   );
 }
 
-function HomePage({ backendStatus }) {
-  const navigate = useNavigate();
+function HomePage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchState, setSearchState] = useState({
     loading: false,
@@ -178,15 +232,6 @@ function HomePage({ backendStatus }) {
     results: [],
   });
   const [selectedPreview, setSelectedPreview] = useState(featuredPlayers[0]);
-
-  const heroMetrics = useMemo(
-    () => [
-      { label: "Player search", value: "ESPN-backed" },
-      { label: "Stored history", value: "Postgres" },
-      { label: "Future layer", value: "Prediction-ready" },
-    ],
-    [],
-  );
 
   async function onSearch(event) {
     event.preventDefault();
@@ -232,29 +277,18 @@ function HomePage({ backendStatus }) {
   }
 
   return (
-    <AppShell backendStatus={backendStatus}>
+    <AppShell>
       <main className="content">
         <section className="hero panel panel-hero">
           <div className="hero-copy">
             <div className="eyebrow-row">
               <span className="eyebrow">NFL player intelligence</span>
-              <StatusPill backendStatus={backendStatus} />
             </div>
             <h1>Search players, explore their history, and build toward smarter betting views.</h1>
             <p className="lede">
-              AGP Bets starts with search and stored player history, then grows into a player
-              detail experience with insights, visuals, and projections built on top of the same
-              backend data.
+              AGP Bets helps you search for players, review recent production, and explore
+              performance trends that can power smarter betting decisions over time.
             </p>
-
-            <div className="metric-row">
-              {heroMetrics.map((metric) => (
-                <div className="metric-card" key={metric.label}>
-                  <span>{metric.label}</span>
-                  <strong>{metric.value}</strong>
-                </div>
-              ))}
-            </div>
 
             <form className="hero-search" onSubmit={onSearch}>
               <label className="search-field">
@@ -312,7 +346,7 @@ function HomePage({ backendStatus }) {
               <span className="card-label">Featured spotlight</span>
               <h2>{selectedPreview.name}</h2>
               <p>
-                {selectedPreview.team} · {selectedPreview.position}
+                {selectedPreview.team} | {selectedPreview.position}
               </p>
               <p className="preview-copy">{selectedPreview.blurb}</p>
               <div className="preview-notes">
@@ -329,8 +363,8 @@ function HomePage({ backendStatus }) {
               <span className="section-kicker">Featured players</span>
               <h2>Players worth keeping an eye on</h2>
               <p>
-                These cards keep the landing page alive and give us a place to plug in live data
-                as the backend grows more opinionated.
+                These cards give us a place to highlight interesting player situations as the app
+                grows into a stronger betting experience.
               </p>
             </div>
           </div>
@@ -348,7 +382,7 @@ function HomePage({ backendStatus }) {
                   <span>{player.label}</span>
                 </div>
                 <p>
-                  {player.team} · {player.position}
+                  {player.team} | {player.position}
                 </p>
                 <small>{player.blurb}</small>
               </button>
@@ -370,18 +404,132 @@ function SummaryCard({ label, value, detail }) {
   );
 }
 
-function PlayerDetailPage({ backendStatus }) {
-  const navigate = useNavigate();
+function formatSplitLabel(value) {
+  if (!value) {
+    return "Unknown split";
+  }
+
+  if (value.toLowerCase() === "home") {
+    return "Home games";
+  }
+
+  if (value.toLowerCase() === "away") {
+    return "Away games";
+  }
+
+  return value;
+}
+
+function SplitCard({ label, games, yardsPerGame, touchdownsPerGame, turnoversPerGame }) {
+  return (
+    <article className="summary-card split-card">
+      <span className="summary-label">{label}</span>
+      <strong>{formatNumber(games)} games</strong>
+      <p>
+        {formatPace(yardsPerGame)} yds/g | {formatPace(touchdownsPerGame)} td/g |{" "}
+        {formatPace(turnoversPerGame)} to/g
+      </p>
+    </article>
+  );
+}
+
+function UpcomingOpponentCard({ upcomingOpponent, opponentTeam, opponentDefense, playerPosition }) {
+  const isQuarterback = (playerPosition ?? "").trim().toUpperCase() === "QB";
+  const yardsLabel = isQuarterback ? "Pass" : "Rec";
+  const lastThreeYardsPerGame = isQuarterback
+    ? upcomingOpponent?.lastThreeSummary?.passingYardsPerGame
+    : upcomingOpponent?.lastThreeSummary?.receivingYardsPerGame;
+  const allTimeYardsPerGame = isQuarterback
+    ? upcomingOpponent?.allTimeSummary?.passingYardsPerGame
+    : upcomingOpponent?.allTimeSummary?.receivingYardsPerGame;
+
+  if (!upcomingOpponent) {
+    return (
+      <article className="summary-card split-card">
+        <span className="summary-label">Upcoming opponent</span>
+        <strong>Matchup details unavailable</strong>
+        <p>Can not load player matchup details at this time.</p>
+      </article>
+    );
+  }
+
+  return (
+    <article className="summary-card split-card upcoming-opponent-card">
+      <span className="summary-label">Upcoming opponent</span>
+      <div className="opponent-card-head">
+        {opponentTeam?.logoUrl ? (
+          <img
+            src={opponentTeam.logoUrl}
+            alt={upcomingOpponent.opponentName ? `${upcomingOpponent.opponentName} logo` : "Team logo"}
+            className="team-logo team-logo-opponent"
+          />
+        ) : null}
+        <div>
+          <strong>{upcomingOpponent.opponentName}</strong>
+          <p>{formatLongDate(upcomingOpponent.gameDate)}</p>
+        </div>
+      </div>
+
+      <div className="opponent-card-grid">
+        <section className="opponent-card-box">
+          <span className="summary-label">{getRecentMatchupLabel(upcomingOpponent.lastThreeSummary)}</span>
+          <strong>{formatNumber(upcomingOpponent.lastThreeSummary?.games ?? 0)} games</strong>
+          <p>
+            {yardsLabel} {formatPace(lastThreeYardsPerGame)} | Rush{" "}
+            {formatPace(upcomingOpponent.lastThreeSummary?.rushingYardsPerGame)} | TD{" "}
+            {formatPace(upcomingOpponent.lastThreeSummary?.totalTouchdownsPerGame)}
+          </p>
+        </section>
+
+        <section className="opponent-card-box">
+          <span className="summary-label">All time</span>
+          <strong>{formatNumber(upcomingOpponent.allTimeSummary?.games ?? 0)} games</strong>
+          <p>
+            {yardsLabel} {formatPace(allTimeYardsPerGame)} | Rush{" "}
+            {formatPace(upcomingOpponent.allTimeSummary?.rushingYardsPerGame)} | TD{" "}
+            {formatPace(upcomingOpponent.allTimeSummary?.totalTouchdownsPerGame)}
+          </p>
+        </section>
+
+        <section className="opponent-card-box opponent-defense-box">
+          <span className="summary-label">Current defense</span>
+          {opponentDefense ? (
+            <>
+              <strong>{formatNumber(opponentDefense.games)} game sample</strong>
+              <p>{formatDefenseRankLabel(opponentDefense)}</p>
+              <p>
+                Pass {formatNullablePace(opponentDefense.passingYardsAllowedPerGame, " yds/g")} | Rush{" "}
+                {formatNullablePace(opponentDefense.rushingYardsAllowedPerGame, " yds/g")} | Sacks{" "}
+                {formatNullablePace(opponentDefense.sacksPerGame, "/g")}
+              </p>
+            </>
+          ) : (
+            <>
+              <strong>Loading defense snapshot</strong>
+              <p>Current defensive context will appear once that team history is loaded.</p>
+            </>
+          )}
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function PlayerDetailPage() {
   const { athleteId } = useParams();
   const location = useLocation();
   const [player, setPlayer] = useState(null);
   const [insights, setInsights] = useState(null);
+  const [playerTeam, setPlayerTeam] = useState(null);
+  const [opponentTeam, setOpponentTeam] = useState(null);
+  const [opponentDefense, setOpponentDefense] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [statusMessage, setStatusMessage] = useState(null);
   const [headshotFailed, setHeadshotFailed] = useState(false);
 
   const headshotUrl = buildEspnHeadshotUrl(player?.espnAthleteId ?? athleteId);
+  const isQuarterback = (player?.position ?? "").trim().toUpperCase() === "QB";
+  const yardsPerGameLabel = isQuarterback ? "Passing and rushing yards per game" : "Yards per game";
 
   useEffect(() => {
     let canceled = false;
@@ -389,8 +537,10 @@ function PlayerDetailPage({ backendStatus }) {
     async function loadPlayerPage() {
       setLoading(true);
       setError(null);
-      setStatusMessage(null);
       setHeadshotFailed(false);
+      setPlayerTeam(null);
+      setOpponentTeam(null);
+      setOpponentDefense(null);
 
       try {
         let playerResponse;
@@ -407,7 +557,6 @@ function PlayerDetailPage({ backendStatus }) {
             throw fetchError;
           }
 
-          setStatusMessage("Loading player data from ESPN...");
           playerResponse = await syncPlayerByAthleteId(athleteId);
         }
 
@@ -416,25 +565,77 @@ function PlayerDetailPage({ backendStatus }) {
         }
 
         try {
-          setStatusMessage("Syncing player stats...");
           await syncPlayerStats(athleteId);
         } catch {
-          setStatusMessage("Player loaded. Stats are still catching up in the background.");
+          // Keep the player page usable even if stats are still catching up.
         }
 
-        const [freshPlayer, insightsResponse] = await Promise.all([
-          getPlayer(athleteId),
-          getPlayerInsights(athleteId),
-        ]);
+        let freshPlayer;
+        let insightsResponse;
+        for (let attempt = 0; attempt <= MATCHUP_RETRY_ATTEMPTS; attempt += 1) {
+          [freshPlayer, insightsResponse] = await Promise.all([
+            getPlayer(athleteId),
+            getPlayerInsights(athleteId),
+          ]);
+
+          const hasMatchupContext =
+            freshPlayer?.teamId &&
+            freshPlayer?.teamName &&
+            freshPlayer?.position &&
+            insightsResponse?.upcomingOpponent;
+
+          if (hasMatchupContext || attempt === MATCHUP_RETRY_ATTEMPTS) {
+            break;
+          }
+
+          await sleep(MATCHUP_RETRY_DELAY_MS);
+        }
 
         if (!canceled) {
           setPlayer(freshPlayer);
           setInsights(insightsResponse);
         }
-      } catch (fetchError) {
+
+        const teamRequests = [];
+        if (freshPlayer?.teamId) {
+          teamRequests.push(
+            getTeam(freshPlayer.teamId)
+              .then((teamResponse) => ({ kind: "playerTeam", value: teamResponse }))
+              .catch(() => ({ kind: "playerTeam", value: null })),
+          );
+        }
+
+        const opponentTeamId = insightsResponse?.upcomingOpponent?.opponentTeamId;
+        if (opponentTeamId) {
+          teamRequests.push(
+            getTeam(opponentTeamId)
+              .then((teamResponse) => ({ kind: "opponentTeam", value: teamResponse }))
+              .catch(() => ({ kind: "opponentTeam", value: null })),
+          );
+          teamRequests.push(
+            getTeamDefenseSummary(opponentTeamId)
+              .then((summaryResponse) => ({ kind: "opponentDefense", value: summaryResponse }))
+              .catch(() => ({ kind: "opponentDefense", value: null })),
+          );
+        }
+
+        if (teamRequests.length > 0) {
+          const responses = await Promise.all(teamRequests);
+          if (!canceled) {
+            for (const response of responses) {
+              if (response.kind === "playerTeam") {
+                setPlayerTeam(response.value);
+              } else if (response.kind === "opponentTeam") {
+                setOpponentTeam(response.value);
+              } else if (response.kind === "opponentDefense") {
+                setOpponentDefense(response.value);
+              }
+            }
+          }
+        }
+      } catch {
         if (!canceled) {
           setError("Failed to load player data right now. Please try again.");
-          setStatusMessage(null);
         }
       } finally {
         if (!canceled) {
@@ -451,36 +652,24 @@ function PlayerDetailPage({ backendStatus }) {
   }, [athleteId, location.state]);
 
   return (
-    <AppShell backendStatus={backendStatus}>
+    <AppShell>
       <main className="content">
         <section className="panel section player-hero">
           <div className="player-hero-main">
-            <button type="button" className="back-link" onClick={() => navigate("/")}>
+            <Link className="back-link" to="/">
               Back to search
-            </button>
+            </Link>
             <div className="eyebrow-row">
               <span className="eyebrow">Player detail</span>
-              <StatusPill backendStatus={backendStatus} />
             </div>
 
             <h1>{player?.displayName ?? "Loading player..."}</h1>
             <p className="lede">
-              {player?.teamName ?? "Unknown team"} · {player?.position ?? "Unknown position"} ·{" "}
-              ESPN ID {athleteId}
+              {player?.teamName ?? "Unknown team"} | {player?.position ?? "Unknown position"}
             </p>
             {location.state?.candidate ? (
-              <p className="player-meta">
-                Search match loaded from the candidate list, then synced into your stored player
-                records.
-              </p>
+              <p className="player-meta">Loaded from search and matched to this player profile.</p>
             ) : null}
-            {statusMessage ? <p className="player-meta">{statusMessage}</p> : null}
-
-            <div className="player-action-row">
-              <button type="button" className="secondary" onClick={() => navigate("/")}>
-                Search another player
-              </button>
-            </div>
           </div>
 
           <div className="player-portrait-card">
@@ -497,7 +686,14 @@ function PlayerDetailPage({ backendStatus }) {
               )}
             </div>
             <div className="player-branding">
-              <span className="card-label">Team branding</span>
+              <span className="card-label">Profile</span>
+              {playerTeam?.logoUrl ? (
+                <img
+                  src={playerTeam.logoUrl}
+                  alt={player?.teamName ? `${player.teamName} logo` : "Team logo"}
+                  className="team-logo team-logo-profile"
+                />
+              ) : null}
               <h2>{player?.teamName ?? "Unknown team"}</h2>
               <p>{player?.position ?? "Unknown position"}</p>
             </div>
@@ -513,25 +709,30 @@ function PlayerDetailPage({ backendStatus }) {
             <section className="panel section">
               <div className="section-head">
                 <div>
-                  <span className="section-kicker">Insight snapshot</span>
-                  <h2>Derived summary from stored game logs</h2>
+                  <span className="section-kicker">Player snapshot</span>
+                  <h2>Quick read on recent form</h2>
                   <p>
-                    These values are calculated from the raw stat rows and will stay the source of
-                    truth for future betting and prediction features.
+                    Start with the pace stats and short-term trends, then move into the game log
+                    for the full picture.
                   </p>
                 </div>
               </div>
 
               <div className="insight-grid">
                 <SummaryCard
-                  label="Games loaded"
-                  value={formatNumber(insights.gamesLoaded)}
-                  detail="Game logs currently available for this player."
-                />
-                <SummaryCard
-                  label="Yards per game"
-                  value={formatPace(insights.overallSummary?.totalYardsPerGame)}
-                  detail="Combined passing, rushing, and receiving yards."
+                  label={yardsPerGameLabel}
+                  value={
+                    isQuarterback
+                      ? `${formatPace(insights.overallSummary?.passingYardsPerGame)} pass | ${formatPace(
+                          insights.overallSummary?.rushingYardsPerGame,
+                        )} rush`
+                      : formatPace(insights.overallSummary?.totalYardsPerGame)
+                  }
+                  detail={
+                    isQuarterback
+                      ? "Passing and rushing are shown separately for quarterbacks."
+                      : "Combined passing, rushing, and receiving yards."
+                  }
                 />
                 <SummaryCard
                   label="Touchdowns per game"
@@ -547,45 +748,61 @@ function PlayerDetailPage({ backendStatus }) {
 
               <div className="summary-grid summary-grid-detail">
                 <article className="summary-card">
-                  <span className="summary-label">Overall</span>
-                  <strong>{formatNumber(insights.overallSummary?.games ?? 0)} games</strong>
-                  <p>
-                    {formatNumber(insights.overallSummary?.totalYardsTotal ?? 0)} total yards and{" "}
-                    {formatNumber(insights.overallSummary?.totalTouchdownsTotal ?? 0)} total touchdowns
-                  </p>
-                </article>
-                <article className="summary-card">
                   <span className="summary-label">Last 5</span>
                   <strong>{formatNumber(insights.lastFiveSummary?.games ?? 0)} games</strong>
                   <p>
-                    {formatPace(insights.lastFiveSummary?.totalYardsPerGame)} yards per game over the
-                    recent window
+                    {isQuarterback
+                      ? `${formatPace(insights.lastFiveSummary?.passingYardsPerGame)} pass | ${formatPace(
+                          insights.lastFiveSummary?.rushingYardsPerGame,
+                        )} rush`
+                      : `${formatPace(insights.lastFiveSummary?.totalYardsPerGame)} yards per game`}
                   </p>
                 </article>
                 <article className="summary-card">
                   <span className="summary-label">Last 3</span>
                   <strong>{formatNumber(insights.lastThreeSummary?.games ?? 0)} games</strong>
                   <p>
-                    {formatPace(insights.lastThreeSummary?.totalYardsPerGame)} yards per game over the
-                    last three
+                    {isQuarterback
+                      ? `${formatPace(insights.lastThreeSummary?.passingYardsPerGame)} pass | ${formatPace(
+                          insights.lastThreeSummary?.rushingYardsPerGame,
+                        )} rush`
+                      : `${formatPace(insights.lastThreeSummary?.totalYardsPerGame)} yards per game`}
                   </p>
                 </article>
                 <article className="summary-card">
-                  <span className="summary-label">Updated</span>
-                  <strong>{formatDate(insights.generatedAt)}</strong>
-                  <p>Latest derived summary from the stored records.</p>
+                  <span className="summary-label">Career sample</span>
+                  <strong>{formatNumber(insights.overallSummary?.games ?? 0)} games</strong>
+                  <p>
+                    {isQuarterback
+                      ? `${formatNumber(insights.overallSummary?.passingYardsTotal ?? 0)} pass yards | ${formatNumber(
+                          insights.overallSummary?.rushingYardsTotal ?? 0,
+                        )} rush yards`
+                      : `${formatNumber(insights.overallSummary?.totalYardsTotal ?? 0)} total yards`}
+                  </p>
+                </article>
+                <article className="summary-card">
+                  <span className="summary-label">Scoring</span>
+                  <strong>{formatNumber(insights.overallSummary?.totalTouchdownsTotal ?? 0)} TDs</strong>
+                  <p>
+                    {isQuarterback
+                      ? `${formatNumber(insights.overallSummary?.passingTouchdownsTotal ?? 0)} pass TDs | ${formatNumber(
+                          insights.overallSummary?.rushingTouchdownsTotal ?? 0,
+                        )} rush TDs`
+                      : `${formatNumber(insights.overallSummary?.touchdownsTotal ?? 0)} total scored plays`}
+                  </p>
                 </article>
               </div>
+
+              <p className="section-note">Last refreshed {formatDate(insights.generatedAt)}</p>
             </section>
 
             <section className="panel section">
               <div className="section-head">
                 <div>
-                  <span className="section-kicker">Recent games</span>
-                  <h2>Game-by-game history</h2>
+                  <span className="section-kicker">Game log</span>
+                  <h2>Recent game-by-game production</h2>
                   <p>
-                    Use this table to inspect the raw lines that drive the later trend and betting
-                    views.
+                    Review the latest box scores with opponent and home-away context for each game.
                   </p>
                 </div>
               </div>
@@ -597,10 +814,9 @@ function PlayerDetailPage({ backendStatus }) {
                       <th>Date</th>
                       <th>Opponent</th>
                       <th>Home/Away</th>
-                      <th>Yards</th>
+                      <th>Production</th>
                       <th>TDs</th>
                       <th>Turnovers</th>
-                      <th>Snaps</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -610,26 +826,92 @@ function PlayerDetailPage({ backendStatus }) {
                           <td>
                             <strong>{formatShortDate(stat.gameDate)}</strong>
                             <div className="subtle">
-                              Season {stat.season ?? "—"} Week {stat.week ?? "—"}
+                              Season {stat.season ?? "-"} Week {stat.week ?? "-"}
                             </div>
                           </td>
                           <td>{stat.opponentName ?? "Unknown"}</td>
                           <td>{stat.homeAway ?? "Unknown"}</td>
-                          <td>{summarizeGame(stat)}</td>
+                          <td>{summarizeGame(stat, player?.position)}</td>
                           <td>{formatNumber(stat.totalTouchdowns ?? stat.touchdowns ?? 0)}</td>
                           <td>{formatNumber(stat.turnovers ?? 0)}</td>
-                          <td>{formatNumber(stat.snapCount ?? 0)}</td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="7" className="candidate-meta">
+                        <td colSpan="6" className="candidate-meta">
                           No game stats loaded for this player yet.
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
+              </div>
+            </section>
+
+            <section className="panel section">
+              <div className="section-head">
+                <div>
+                  <span className="section-kicker">Derived splits</span>
+                  <h2>Home, away, and opponent samples</h2>
+                  <p>
+                    Use these smaller views to compare where a player has been producing and which
+                    matchups stand out in the stored sample.
+                  </p>
+                </div>
+              </div>
+
+              <div className="split-section">
+                <div>
+                  <h3 className="split-heading">Upcoming matchup</h3>
+                  <div className="summary-grid split-grid split-grid-single">
+                    <UpcomingOpponentCard
+                      upcomingOpponent={insights.upcomingOpponent}
+                      opponentTeam={opponentTeam}
+                      opponentDefense={opponentDefense}
+                      playerPosition={player?.position}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="split-heading">Home and away</h3>
+                  <div className="summary-grid split-grid">
+                    {insights.homeAwaySplits?.length ? (
+                      insights.homeAwaySplits.map((split) => (
+                        <SplitCard
+                          key={`${split.splitType}-${split.splitValue}`}
+                          label={formatSplitLabel(split.splitValue)}
+                          games={split.summary?.games ?? 0}
+                          yardsPerGame={split.summary?.totalYardsPerGame}
+                          touchdownsPerGame={split.summary?.totalTouchdownsPerGame}
+                          turnoversPerGame={split.summary?.turnoversPerGame}
+                        />
+                      ))
+                    ) : (
+                      <p className="candidate-meta">No home/away split data is available yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="split-heading">Top opponents</h3>
+                  <div className="summary-grid split-grid">
+                    {insights.opponentSplits?.length ? (
+                      insights.opponentSplits.map((split) => (
+                        <SplitCard
+                          key={`${split.splitType}-${split.splitValue}`}
+                          label={split.splitValue}
+                          games={split.summary?.games ?? 0}
+                          yardsPerGame={split.summary?.totalYardsPerGame}
+                          touchdownsPerGame={split.summary?.totalTouchdownsPerGame}
+                          turnoversPerGame={split.summary?.turnoversPerGame}
+                        />
+                      ))
+                    ) : (
+                      <p className="candidate-meta">No opponent split data is available yet.</p>
+                    )}
+                  </div>
+                </div>
               </div>
             </section>
           </>
@@ -640,36 +922,11 @@ function PlayerDetailPage({ backendStatus }) {
 }
 
 function App() {
-  const [backendStatus, setBackendStatus] = useState("Checking backend...");
-
-  useEffect(() => {
-    let canceled = false;
-
-    async function loadStatus() {
-      try {
-        await checkBackend();
-        if (!canceled) {
-          setBackendStatus("Backend online");
-        }
-      } catch {
-        if (!canceled) {
-          setBackendStatus("Backend offline");
-        }
-      }
-    }
-
-    loadStatus();
-
-    return () => {
-      canceled = true;
-    };
-  }, []);
-
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<HomePage backendStatus={backendStatus} />} />
-        <Route path="/players/:athleteId" element={<PlayerDetailPage backendStatus={backendStatus} />} />
+        <Route path="/" element={<HomePage />} />
+        <Route path="/players/:athleteId" element={<PlayerDetailPage />} />
       </Routes>
     </BrowserRouter>
   );

@@ -7,9 +7,12 @@ import com.agp.bets.goforbroke.player.repository.PlayerRepository;
 import com.agp.bets.goforbroke.player.web.dto.PlayerGameStatResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerInsightsResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerInsightsResponse.PlayerInsightSplitResponse;
+import com.agp.bets.goforbroke.player.web.dto.PlayerInsightsResponse.UpcomingOpponentInsightResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerResponse;
+import com.agp.bets.goforbroke.team.service.TeamRefreshService;
+import com.agp.bets.goforbroke.team.service.UpcomingOpponent;
+import com.agp.bets.goforbroke.team.service.UpcomingOpponentLookupService;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -28,12 +31,22 @@ public class PlayerInsightsService {
 
   private final PlayerRepository playerRepository;
   private final PlayerGameStatRepository playerGameStatRepository;
+  private final PlayerRefreshService playerRefreshService;
+  private final UpcomingOpponentLookupService upcomingOpponentLookupService;
+  private final TeamRefreshService teamRefreshService;
   private final Clock clock = Clock.systemUTC();
 
   public PlayerInsightsService(
-      PlayerRepository playerRepository, PlayerGameStatRepository playerGameStatRepository) {
+      PlayerRepository playerRepository,
+      PlayerGameStatRepository playerGameStatRepository,
+      PlayerRefreshService playerRefreshService,
+      UpcomingOpponentLookupService upcomingOpponentLookupService,
+      TeamRefreshService teamRefreshService) {
     this.playerRepository = playerRepository;
     this.playerGameStatRepository = playerGameStatRepository;
+    this.playerRefreshService = playerRefreshService;
+    this.upcomingOpponentLookupService = upcomingOpponentLookupService;
+    this.teamRefreshService = teamRefreshService;
   }
 
   public PlayerInsightsResponse getInsightsForAthleteId(String athleteId) {
@@ -43,12 +56,19 @@ public class PlayerInsightsService {
             .orElseThrow(
                 () -> new PlayerNotFoundException("No stored player found for ESPN athlete " + athleteId));
 
+    if (needsPlayerMetadataRefresh(player)) {
+      playerRefreshService.requestRefreshIfNeeded(player.getEspnAthleteId());
+    }
+
+    teamRefreshService.requestRefreshIfStale(player.getTeamId());
+
     List<PlayerGameStat> stats = playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
     List<PlayerGameStat> recentStats = stats.stream().limit(DEFAULT_RECENT_GAME_WINDOW).toList();
 
     PlayerStatInsightSummary overallSummary = summarize(stats);
     PlayerStatInsightSummary lastFiveSummary = summarize(recentStats);
     PlayerStatInsightSummary lastThreeSummary = summarize(stats.stream().limit(3).toList());
+    UpcomingOpponentInsightResponse upcomingOpponent = buildUpcomingOpponentInsight(player, stats);
 
     List<PlayerInsightSplitResponse> homeAwaySplits =
         buildHomeAwaySplits(stats).stream().map(PlayerInsightSplitResponse::from).toList();
@@ -62,10 +82,33 @@ public class PlayerInsightsService {
         overallSummary,
         lastFiveSummary,
         lastThreeSummary,
+        upcomingOpponent,
         homeAwaySplits,
         opponentSplits,
         recentStats.stream().map(PlayerGameStatResponse::from).toList(),
         clock.instant());
+  }
+
+  private UpcomingOpponentInsightResponse buildUpcomingOpponentInsight(
+      Player player, List<PlayerGameStat> stats) {
+    return upcomingOpponentLookupService
+        .findUpcomingOpponent(player.getTeamId())
+        .map(opponent -> toUpcomingOpponentInsight(opponent, stats))
+        .orElse(null);
+  }
+
+  private UpcomingOpponentInsightResponse toUpcomingOpponentInsight(
+      UpcomingOpponent opponent, List<PlayerGameStat> stats) {
+    List<PlayerGameStat> matchingStats =
+        stats.stream().filter(stat -> matchesOpponent(stat, opponent)).toList();
+    List<PlayerGameStat> lastThreeMatchups = matchingStats.stream().limit(3).toList();
+
+    return new UpcomingOpponentInsightResponse(
+        opponent.opponentTeamId(),
+        opponent.opponentName(),
+        opponent.gameDate(),
+        summarize(lastThreeMatchups),
+        summarize(matchingStats));
   }
 
   private List<PlayerInsightSplit> buildHomeAwaySplits(List<PlayerGameStat> stats) {
@@ -108,9 +151,20 @@ public class PlayerInsightsService {
                             .max(Comparator.naturalOrder())
                             .orElse(null),
                     Comparator.nullsLast(Comparator.reverseOrder())))
-        .limit(5)
+        .limit(3)
         .map(entry -> new PlayerInsightSplit("opponent", entry.getKey(), summarize(entry.getValue())))
         .toList();
+  }
+
+  private boolean matchesOpponent(PlayerGameStat stat, UpcomingOpponent opponent) {
+    if (opponent.opponentTeamId() != null
+        && !opponent.opponentTeamId().isBlank()
+        && stat.getOpponentTeamId() != null
+        && opponent.opponentTeamId().equals(stat.getOpponentTeamId())) {
+      return true;
+    }
+
+    return normalize(opponent.opponentName()).equals(normalize(stat.getOpponentName()));
   }
 
   private PlayerStatInsightSummary summarize(List<PlayerGameStat> stats) {
@@ -171,5 +225,26 @@ public class PlayerInsightsService {
       return 0.0d;
     }
     return (double) total(stats, accessor) / stats.size();
+  }
+
+  private String normalize(String value) {
+    if (value == null) {
+      return "";
+    }
+
+    return value.trim().toLowerCase();
+  }
+
+  private boolean needsPlayerMetadataRefresh(Player player) {
+    if (player == null || player.getEspnAthleteId() == null || player.getEspnAthleteId().isBlank()) {
+      return false;
+    }
+
+    return player.getPosition() == null
+        || player.getPosition().isBlank()
+        || player.getTeamName() == null
+        || player.getTeamName().isBlank()
+        || player.getTeamId() == null
+        || player.getTeamId().isBlank();
   }
 }

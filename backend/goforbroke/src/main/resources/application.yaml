@@ -20,3 +20,9 @@ server:
     enabled: false
     certificate: ""
     key-store: ""
+
+agp:
+  team-refresh:
+    schedule:
+      enabled: ${AGP_TEAM_REFRESH_SCHEDULE_ENABLED:false}
+      cron: ${AGP_TEAM_REFRESH_SCHEDULE_CRON:0 0 */6 * * *}

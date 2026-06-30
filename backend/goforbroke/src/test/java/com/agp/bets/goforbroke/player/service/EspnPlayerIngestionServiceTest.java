@@ -50,53 +50,20 @@ class EspnPlayerIngestionServiceTest {
   }
 
   @Test
-  void refreshesIncompleteStoredPlayerBeforeReturningIt() throws Exception {
+  void queuesBackgroundRefreshForIncompleteStoredPlayerBeforeReturningIt() throws Exception {
     Player stale = new Player();
     stale.setId(1L);
     stale.setEspnAthleteId("2");
     stale.setDisplayName("Jayden Daniels");
     stale.setFetchedAt(Instant.parse("2026-06-03T23:30:00Z"));
 
-    JsonNode athleteDetailNode =
-        objectMapper.readTree(
-            """
-            {
-              "id": "2",
-              "displayName": "Jayden Daniels",
-              "firstName": "Jayden",
-              "lastName": "Daniels",
-              "position": {
-                "displayName": "QB",
-                "abbreviation": "QB"
-              },
-              "team": {
-                "id": "28",
-                "displayName": "Washington Commanders"
-              },
-              "active": true
-            }
-            """);
-
-    Player refreshed = new Player();
-    refreshed.setId(1L);
-    refreshed.setEspnAthleteId("2");
-    refreshed.setDisplayName("Jayden Daniels");
-    refreshed.setPosition("QB");
-    refreshed.setTeamName("Washington Commanders");
-    refreshed.setFetchedAt(clock.instant());
-
     when(playerRepository.findFirstByDisplayNameIgnoreCase("Jayden Daniels"))
         .thenReturn(Optional.of(stale));
-    when(espnPlayerClient.fetchAthleteById("2")).thenReturn(athleteDetailNode);
-    when(espnPlayerClient.buildAthleteUrl("2")).thenReturn("https://example.com/2");
-    when(playerUpsertService.upsertAthlete(athleteDetailNode, "https://example.com/2"))
-        .thenReturn(refreshed);
 
     Player result = service.findOrLoadPlayerByName("Jayden Daniels");
 
-    assertEquals("QB", result.getPosition());
-    assertEquals("Washington Commanders", result.getTeamName());
-    verify(playerRefreshService, never()).refreshPlayerByAthleteIdAsync("2");
+    assertSame(stale, result);
+    verify(playerRefreshService).refreshPlayerByAthleteIdAsync("2");
   }
 
   @Test
