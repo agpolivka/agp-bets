@@ -239,7 +239,21 @@ public final class EspnPlayerGameStatMapper {
       fumblesLost = firstInt(entry, "fumblesLost", "lostFumbles").orElse(null);
     }
     if (snapCount == null) {
-      snapCount = statValue(labels, statValues, 1, "SNAP", "SNAPS", "SNAPCOUNT", "SNAP COUNT", "SNP");
+      snapCount =
+          firstInt(entry, "snapCount", "snap_count", "snaps", "plays", "playCount", "play_count")
+              .orElseGet(
+                  () ->
+                      statValue(
+                          labels,
+                          statValues,
+                          1,
+                          "SNAP",
+                          "SNAPS",
+                          "SNAPCOUNT",
+                          "SNAP COUNT",
+                          "SNP",
+                          "PLAYS",
+                          "PLAY"));
     }
     if (carries == null) {
       carries = firstInt(entry, "carries", "rushAttempts", "rushingAttempts", "attempts").orElse(null);
@@ -251,10 +265,10 @@ public final class EspnPlayerGameStatMapper {
       receptions = firstInt(entry, "receptions", "catches").orElse(null);
     }
     if (drops == null) {
-      drops = statValue(labels, statValues, 1, "DROP", "DROPS");
+      drops = statValue(labels, statValues, 1, "DROP", "DROPS", "DROPS", "DROP COUNT");
     }
     if (drops == null) {
-      drops = firstInt(entry, "drops").orElse(null);
+      drops = firstInt(entry, "drops", "dropCount", "drop_count", "dropTotal", "drop_total").orElse(null);
     }
 
     Integer totalYards =

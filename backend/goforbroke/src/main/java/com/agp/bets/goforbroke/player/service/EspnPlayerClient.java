@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Map;
 import java.util.Comparator;
+import java.util.Locale;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -29,6 +31,8 @@ public class EspnPlayerClient {
   private static final String USER_AGENT = "Mozilla/5.0";
   private static final int ATHLETE_PAGE_LIMIT = 1000;
   private static final int MAX_ATHLETE_PAGES = 25;
+  private static final Set<String> ALLOWED_SEARCH_POSITIONS =
+      Set.of("QB", "RB", "FB", "WR", "TE");
 
   private final HttpClient httpClient;
   private final ObjectMapper objectMapper;
@@ -87,10 +91,15 @@ public class EspnPlayerClient {
   public List<AthleteCandidate> findAthleteCandidatesByDisplayName(String playerName, int maxCandidates) {
     int requestedLimit = Math.max(1, maxCandidates);
     Map<String, AthleteCandidate> candidatesById = new HashMap<>();
+    String normalizedQuery = normalize(playerName);
+    boolean foundExactMatch = false;
 
     for (int page = 1; page <= MAX_ATHLETE_PAGES; page++) {
       JsonNode athletes = fetchAthletesPage(page, ATHLETE_PAGE_LIMIT);
-      EspnAthleteMapper.findAthleteCandidates(athletes, playerName, ATHLETE_PAGE_LIMIT)
+      List<AthleteCandidate> pageCandidates =
+          EspnAthleteMapper.findAthleteCandidates(athletes, playerName, ATHLETE_PAGE_LIMIT);
+
+      pageCandidates
           .forEach(
               candidate ->
                   candidatesById.merge(
@@ -98,7 +107,16 @@ public class EspnPlayerClient {
                       candidate,
                       (left, right) -> right.score() >= left.score() ? right : left));
 
+      foundExactMatch =
+          foundExactMatch
+              || pageCandidates.stream()
+                  .anyMatch(candidate -> isExactMatch(candidate, normalizedQuery));
+
       if (isLastPage(athletes)) {
+        break;
+      }
+
+      if (foundExactMatch) {
         break;
       }
     }
@@ -111,6 +129,7 @@ public class EspnPlayerClient {
                 .thenComparing(AthleteCandidate::espnAthleteId))
         .limit(requestedLimit)
         .map(this::enrichCandidateFromAthleteDetails)
+        .filter(candidate -> candidate != null && isAllowedSearchPosition(candidate.position()))
         .toList();
   }
 
@@ -154,10 +173,29 @@ public class EspnPlayerClient {
 
     try {
       JsonNode athlete = fetchAthleteById(candidate.espnAthleteId());
-      return EspnAthleteMapper.toCandidate(athlete, candidate.score());
+      AthleteCandidate enriched = EspnAthleteMapper.toCandidate(athlete, candidate.score());
+      return enriched;
     } catch (EspnLookupException exception) {
       return candidate;
     }
+  }
+
+  private boolean isAllowedSearchPosition(String position) {
+    if (position == null || position.isBlank()) {
+      return false;
+    }
+
+    return ALLOWED_SEARCH_POSITIONS.contains(position.trim().toUpperCase());
+  }
+
+  private boolean isExactMatch(AthleteCandidate candidate, String normalizedQuery) {
+    if (candidate == null || normalizedQuery == null || normalizedQuery.isBlank()) {
+      return false;
+    }
+
+    return normalizedQuery.equals(normalize(candidate.displayName()))
+        || normalizedQuery.equals(normalize(candidate.firstName() + " " + candidate.lastName()))
+        || normalizedQuery.equals(normalize(candidate.lastName() + " " + candidate.firstName()));
   }
 
   private JsonNode fetchJson(String url) {
@@ -233,5 +271,17 @@ public class EspnPlayerClient {
     return value.toLowerCase()
         .replaceAll("[^a-z0-9]+", "-")
         .replaceAll("^-+|-+$", "");
+  }
+
+  private String normalize(String value) {
+    if (value == null) {
+      return "";
+    }
+
+    return value.trim()
+        .toLowerCase(Locale.ROOT)
+        .replaceAll("[^a-z0-9\\s]", " ")
+        .replaceAll("\\s+", " ")
+        .trim();
   }
 }

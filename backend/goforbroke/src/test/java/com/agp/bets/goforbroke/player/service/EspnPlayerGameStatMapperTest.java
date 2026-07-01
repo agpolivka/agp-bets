@@ -174,6 +174,103 @@ class EspnPlayerGameStatMapperTest {
   }
 
   @Test
+  void fallsBackToDirectSnapAndDropFieldsWhenLabelParsingIsMissing() {
+    Player player = new Player();
+    player.setPosition("WR");
+
+    List<PlayerGameStatSnapshot> snapshots =
+        EspnPlayerGameStatMapper.toSnapshots(
+            player,
+            parse(
+                """
+                {
+                  "statistics": {
+                    "splits": [
+                      {
+                        "dt": "2026-09-10T20:25:00.000+00:00",
+                        "season": 2026,
+                        "week": 1,
+                        "opp": {
+                          "id": "9",
+                          "name": "New York Giants",
+                          "atVs": "vs"
+                        },
+                        "snapCount": 42,
+                        "dropCount": 3,
+                        "stats": ["7", "9", "101", "14.4", "1", "34", "2", "2", "0", "0", "0", "0", "0", "0", "0", "0"]
+                      }
+                    ]
+                  },
+                  "labels": [
+                    { "data": "REC" },
+                    { "data": "TGTS" },
+                    { "data": "YDS" }
+                  ]
+                }
+                """),
+            "https://example.com/statisticslog",
+            Instant.parse("2026-09-11T00:00:00Z"));
+
+    assertEquals(1, snapshots.size());
+    assertEquals(42, snapshots.get(0).snapCount());
+    assertEquals(3, snapshots.get(0).drops());
+  }
+
+  @Test
+  void recognizesPlaysAsSnapCountWhenESPNUsesAlternativeLabeling() {
+    Player player = new Player();
+    player.setPosition("QB");
+
+    List<PlayerGameStatSnapshot> snapshots =
+        EspnPlayerGameStatMapper.toSnapshots(
+            player,
+            parse(
+                """
+                {
+                  "statistics": {
+                    "splits": [
+                      {
+                        "dt": "2026-09-10T20:25:00.000+00:00",
+                        "season": 2026,
+                        "week": 1,
+                        "opp": {
+                          "id": "6",
+                          "name": "Dallas Cowboys",
+                          "atVs": "@"
+                        },
+                        "stats": ["24", "38", "300", "63.2", "7.9", "2", "1", "40", "2", "104.3", "70.0", "3", "15", "5.0", "1", "8", "67"]
+                      }
+                    ]
+                  },
+                  "labels": [
+                    { "data": "CMP" },
+                    { "data": "ATT" },
+                    { "data": "YDS" },
+                    { "data": "CMP%" },
+                    { "data": "AVG" },
+                    { "data": "TD" },
+                    { "data": "INT" },
+                    { "data": "LNG" },
+                    { "data": "SACK" },
+                    { "data": "RTG" },
+                    { "data": "QBR" },
+                    { "data": "CAR" },
+                    { "data": "YDS" },
+                    { "data": "AVG" },
+                    { "data": "TD" },
+                    { "data": "LNG" },
+                    { "data": "PLAYS" }
+                  ]
+                }
+                """),
+            "https://example.com/statisticslog",
+            Instant.parse("2026-09-11T00:00:00Z"));
+
+    assertEquals(1, snapshots.size());
+    assertEquals(67, snapshots.get(0).snapCount());
+  }
+
+  @Test
   void derivesSeasonFromGameDateWhenSeasonIsMissing() {
     Player player = new Player();
     player.setPosition("QB");

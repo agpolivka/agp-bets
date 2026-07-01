@@ -12,6 +12,19 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
 
   Optional<Player> findFirstByDisplayNameIgnoreCase(String displayName);
 
+  @Query(
+      """
+      select p
+      from Player p
+      where lower(p.displayName) like lower(concat('%', :query, '%'))
+         or lower(coalesce(p.firstName, '')) like lower(concat('%', :query, '%'))
+         or lower(coalesce(p.lastName, '')) like lower(concat('%', :query, '%'))
+      order by
+        case when lower(p.displayName) = lower(:query) then 0 else 1 end,
+        p.displayName asc
+      """)
+  List<Player> searchByNameFragment(String query);
+
   List<Player> findAllByOrderByDisplayNameAsc();
 
   @Query(

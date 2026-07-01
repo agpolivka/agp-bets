@@ -108,6 +108,11 @@ public class TeamSyncService {
 
   private void syncTeamDefenseGames(Team team) {
     int currentYear = Year.now(clock).getValue();
+    int offensiveGames = 0;
+    int offensivePoints = 0;
+    int passingYards = 0;
+    int rushingYards = 0;
+    int totalYards = 0;
     for (int season = currentYear - TEAM_HISTORY_BACKFILL_YEARS + 1; season <= currentYear; season++) {
       JsonNode schedule = espnTeamClient.fetchTeamSchedule(team.getEspnTeamId(), season);
       hydrateSeasonSummary(team, schedule);
@@ -118,9 +123,23 @@ public class TeamSyncService {
           continue;
         }
 
-        upsertDefenseGame(team, event, espnTeamClient.fetchGameSummary(event.path("id").asText()), clock.instant());
+        JsonNode summary = espnTeamClient.fetchGameSummary(event.path("id").asText());
+        upsertDefenseGame(team, event, summary, clock.instant());
+        Map<String, JsonNode> teamStats = extractTeamBoxscoreStats(summary, team.getEspnTeamId());
+        offensiveGames++;
+        offensivePoints += parseInteger(findStat(teamStats, "points")) == null ? 0 : parseInteger(findStat(teamStats, "points"));
+        passingYards += parseInteger(findStat(teamStats, "netPassingYards")) == null ? 0 : parseInteger(findStat(teamStats, "netPassingYards"));
+        rushingYards += parseInteger(findStat(teamStats, "rushingYards")) == null ? 0 : parseInteger(findStat(teamStats, "rushingYards"));
+        totalYards += parseInteger(findStat(teamStats, "totalYards")) == null ? 0 : parseInteger(findStat(teamStats, "totalYards"));
       }
     }
+
+    team.setSeasonOffensiveGames(offensiveGames);
+    team.setSeasonOffensivePoints(offensivePoints);
+    team.setSeasonPassingYards(passingYards);
+    team.setSeasonRushingYards(rushingYards);
+    team.setSeasonTotalYards(totalYards);
+    teamRepository.save(team);
   }
 
   private Team upsertTeam(JsonNode teamNode, Instant now) {
@@ -256,6 +275,10 @@ public class TeamSyncService {
     }
 
     return statsByName;
+  }
+
+  private JsonNode findStat(Map<String, JsonNode> statsByName, String name) {
+    return statsByName.get(name);
   }
 
   private JsonNode findCompetitor(JsonNode competition, String teamId) {

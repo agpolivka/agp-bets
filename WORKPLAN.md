@@ -6,9 +6,11 @@ It should stay lightweight and evolve as the project matures.
 ## Current Focus
 
 The project now has a real React/Vite frontend, dedicated player pages, automatic player
-hydration, automatic stat sync on page load, and player headshots on the detail screen.
-The next session should focus on improving the quality of derived insights, cleaning up
-what information is displayed, and continuing to harden historical stat freshness.
+hydration, automatic stat sync on page load, player headshots on the detail screen, and a
+better search flow that favors stored players first and ESPN fallback second.
+The next session should focus on shipping the first prediction endpoint, then improving
+the quality of derived insights, cleaning up what information is displayed, and continuing
+to harden historical stat freshness.
 The premium or special-user layer should remain a future phase, after the derived-stat
 experience is strong enough to justify it.
 
@@ -32,6 +34,12 @@ experience is strong enough to justify it.
   - new `TeamDefenseGameStat` storage for game-level defensive results
   - admin sync endpoints for direct team sync and syncing teams linked to stored players
   - upcoming opponent lookup support now feeding player insights
+- Improved player search behavior:
+  - local database search runs first
+  - ESPN candidate search is limited to offensive positions
+  - search results are cached with a short TTL
+  - search ranking now handles typos better while keeping the list tight
+- Fixed a bug in ESPN candidate traversal so valid players are not skipped by nested payload shapes.
 
 ## Priority 1: Derived Stats and Insights Cleanup
 
@@ -44,6 +52,14 @@ Desired behavior:
 - Add stronger last-X-game views, home/away splits, opponent splits, and trend summaries.
 - Keep raw game stats as the source of truth and derive everything cleanly on top.
 - Add more matchup-aware derived views that can later support premium-only insights.
+- Add the first player prediction endpoint with a mean projection and confidence interval.
+- Start with a simple weighted-average model before getting fancy with machine learning.
+- Keep the prediction layer honest by clearly exposing when confidence is low.
+- Keep the prediction layer honest by tracking the missing inputs that impact quality most:
+  - incomplete snap counts and drops
+  - missing team offense model
+  - incomplete defensive matchup features
+  - missing injury, weather, Vegas, and projected-usage inputs
 
 Implementation ideas:
 
@@ -53,6 +69,8 @@ Implementation ideas:
   - RB rushing/receiving opportunity summaries
   - WR/TE target, reception, and yardage summaries
 - Add clearer role-aware insight cards instead of one generic layout for every position.
+- Expose a `PlayerPrediction` response model from the backend so the frontend can render it directly.
+- Add a small prediction service layer that can later swap from weighted averages to a more advanced model.
 
 ## Priority 2: Historical Backfill and Stat Freshness
 
@@ -70,6 +88,12 @@ Implementation ideas:
 - Improve the season and game-log backfill strategy.
 - Add a better scheduled/admin refresh path for old and new stat lines.
 - Preserve raw game stats as the source of truth and derive insights from them.
+- Add lightweight search-result caching and consider broader preload jobs only after the public player experience needs them.
+- Fill in stat fields that materially improve prediction quality, especially:
+  - snap counts
+  - drops
+  - older-season historical coverage
+  - any missing team/game metadata that reduces matchup quality
 
 ## Priority 3: Clean Up Displayed Information
 
@@ -89,7 +113,24 @@ Implementation ideas:
 - Trim fields that are technically present but not useful yet.
 - Continue moving the app away from a database-viewer feel.
 
-## Priority 4: Team Identity and Visuals
+## Priority 4: Prediction Inputs and Confidence
+
+Goal: make the prediction layer realistic by improving the inputs it depends on before we try to make it fancy.
+
+Desired behavior:
+
+- Derived predictions should clearly show a projection mean and a confidence interval.
+- The system should explain when confidence is low because of limited data or high variance.
+- We should improve the inputs that matter most before relying on predictions for public use.
+
+Implementation ideas:
+
+- Add missing stat ingestion work for snap counts and drops.
+- Build a cleaner team offense model to pair with the defensive data already being collected.
+- Expand matchup features so predictions can account for the opponent more realistically.
+- Add optional future inputs for injury, weather, Vegas lines, and projected usage once the core system is stable.
+
+## Priority 5: Team Identity and Visuals
 
 Goal: round out player pages with team-aware visuals once team data is modeled more cleanly.
 
@@ -105,7 +146,7 @@ Implementation ideas:
 - Avoid stuffing long-term team concerns directly into player-only components.
 - Reuse the current player visual card once team branding is ready.
 
-## Priority 5: Team Defense Data Foundation
+## Priority 6: Team Defense Data Foundation
 
 Goal: store enough team and defense history to support matchup-driven player insights and later predictions.
 
@@ -133,7 +174,7 @@ Implementation ideas:
   - investigating whether defensive scheme is available anywhere reliable
   - revisiting receiving-yards-allowed if ESPN exposes a better source than team passing totals
 
-## Priority 6: Candidate Matching Cleanup
+## Priority 7: Candidate Matching Cleanup
 
 Goal: keep search results tight and typo-tolerant as usage grows.
 
@@ -151,7 +192,7 @@ Implementation ideas:
 - Keep search output clean and player-centric.
 - Preserve typo tolerance without overwhelming the user with low-quality matches.
 
-## Priority 7: Performance and Responsiveness
+## Priority 8: Performance and Responsiveness
 
 Goal: make the app feel fast, especially for the two hottest user paths.
 
@@ -168,12 +209,15 @@ Implementation ideas:
 - Reduce repeated backend calls during a single player page load.
 - Make background refresh behavior more incremental where possible.
 - Revisit slow queries or joins if player search or page load starts lagging.
+- Consider a background preload strategy for high-value offensive players using team rosters or ESPN listings if first-hit latency becomes a bigger issue.
+- Keep prediction performance in mind once prediction endpoints start using larger history windows.
 
 ## Longer-Term Direction
 
 - Add richer player trend and split views.
 - Add role-specific player cards and comparison views.
 - Introduce caching for common lookups.
+- Evaluate a background preload job for likely offensive players once usage warrants it.
 - Build prediction-ready features from the stored history.
 - Expand from player analysis into team-level analysis later.
 - Add premium-user-only derived views once the public experience is stable.

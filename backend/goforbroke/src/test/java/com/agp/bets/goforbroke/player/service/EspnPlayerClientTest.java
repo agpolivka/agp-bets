@@ -43,6 +43,23 @@ class EspnPlayerClientTest {
                     }
                     """);
           }
+
+          @Override
+          public JsonNode fetchAthleteById(String athleteId) {
+            return parse(
+                """
+                {
+                  "athlete": {
+                    "id": "2",
+                    "displayName": "Jayden Daniels",
+                    "firstName": "Jayden",
+                    "lastName": "Daniels",
+                    "position": { "displayName": "QB" },
+                    "team": { "displayName": "Washington Commanders", "id": "28" }
+                  }
+                }
+                """);
+          }
         };
 
     Optional<JsonNode> athlete = client.findAthleteByDisplayName("Jayden Daniels");
@@ -88,6 +105,23 @@ class EspnPlayerClientTest {
                     }
                     """);
           }
+
+          @Override
+          public JsonNode fetchAthleteById(String athleteId) {
+            return parse(
+                """
+                {
+                  "athlete": {
+                    "id": "2",
+                    "displayName": "Josh Allen",
+                    "firstName": "Josh",
+                    "lastName": "Allen",
+                    "position": { "displayName": "QB" },
+                    "team": { "displayName": "Buffalo Bills", "id": "2" }
+                  }
+                }
+                """);
+          }
         };
 
     List<AthleteCandidate> candidates = client.findAthleteCandidatesByDisplayName("Jaden Daniles", 5);
@@ -96,6 +130,66 @@ class EspnPlayerClientTest {
     assertEquals("2", candidates.get(0).espnAthleteId());
     assertTrue(candidates.get(0).score() > 0.5d);
     assertEquals(List.of(1, 2), requestedPages);
+  }
+
+  @Test
+  void findAthleteCandidatesByDisplayNameStopsEarlyOnExactMatch() throws Exception {
+    List<Integer> requestedPages = new ArrayList<>();
+
+    EspnPlayerClient client =
+        new EspnPlayerClient(objectMapper) {
+          @Override
+          public JsonNode fetchAthletesPage(int page, int limit) {
+            requestedPages.add(page);
+            return page == 1
+                ? parse(
+                    """
+                    {
+                      "pageIndex": 1,
+                      "pageCount": 3,
+                      "items": [
+                        {
+                          "id": "2",
+                          "displayName": "Josh Allen",
+                          "firstName": "Josh",
+                          "lastName": "Allen",
+                          "position": { "displayName": "QB" },
+                          "team": { "displayName": "Buffalo Bills" }
+                        }
+                      ]
+                    }
+                    """)
+                : parse(
+                    """
+                    {
+                      "items": []
+                    }
+                    """);
+          }
+
+          @Override
+          public JsonNode fetchAthleteById(String athleteId) {
+            return parse(
+                """
+                {
+                  "athlete": {
+                    "id": "2",
+                    "displayName": "Josh Allen",
+                    "firstName": "Josh",
+                    "lastName": "Allen",
+                    "position": { "displayName": "QB" },
+                    "team": { "displayName": "Buffalo Bills", "id": "2" }
+                  }
+                }
+                """);
+          }
+        };
+
+    List<AthleteCandidate> candidates = client.findAthleteCandidatesByDisplayName("Josh Allen", 5);
+
+    assertEquals(1, candidates.size());
+    assertEquals("2", candidates.get(0).espnAthleteId());
+    assertEquals(List.of(1), requestedPages);
   }
 
   @Test

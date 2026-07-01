@@ -303,10 +303,7 @@ public final class EspnAthleteMapper {
 
       Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
       while (fields.hasNext()) {
-        JsonNode value = fields.next().getValue();
-        if (value.isArray()) {
-          collectCandidateNodes(value, consumer);
-        }
+        collectCandidateNodes(fields.next().getValue(), consumer);
       }
     }
   }

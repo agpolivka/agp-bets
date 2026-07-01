@@ -7,6 +7,10 @@ import java.time.Clock;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +25,8 @@ public class EspnPlayerIngestionService {
   private final PlayerUpsertService playerUpsertService;
   private final PlayerRefreshService playerRefreshService;
   private final Clock clock;
+  private final ConcurrentMap<String, CachedCandidates> candidateCache = new ConcurrentHashMap<>();
+  private static final long SEARCH_CACHE_TTL_MINUTES = 5;
 
   @Autowired
   public EspnPlayerIngestionService(
@@ -61,7 +67,27 @@ public class EspnPlayerIngestionService {
 
   @Transactional(readOnly = true)
   public List<AthleteCandidate> findPlayerCandidatesByName(String playerName) {
-    return espnPlayerClient.findAthleteCandidatesByDisplayName(playerName, 10);
+    String cacheKey = normalize(playerName);
+    CachedCandidates cached = candidateCache.get(cacheKey);
+    if (cached != null && !cached.isExpired(clock.instant())) {
+      return cached.candidates();
+    }
+
+    List<AthleteCandidate> localCandidates = findLocalPlayerCandidates(playerName);
+    if (hasStrongLocalMatch(localCandidates)) {
+      cacheCandidates(cacheKey, localCandidates);
+      return localCandidates;
+    }
+
+    List<AthleteCandidate> espnCandidates = espnPlayerClient.findAthleteCandidatesByDisplayName(playerName, 10);
+    if (espnCandidates.isEmpty()) {
+      cacheCandidates(cacheKey, localCandidates);
+      return localCandidates;
+    }
+
+    List<AthleteCandidate> merged = mergeCandidates(localCandidates, espnCandidates, 5);
+    cacheCandidates(cacheKey, merged);
+    return merged;
   }
 
   public Player syncPlayerByName(String playerName) {
@@ -162,5 +188,113 @@ public class EspnPlayerIngestionService {
         || player.getPosition().isBlank()
         || player.getTeamName() == null
         || player.getTeamName().isBlank();
+  }
+
+  private List<AthleteCandidate> findLocalPlayerCandidates(String playerName) {
+    if (playerName == null || playerName.isBlank()) {
+      return List.of();
+    }
+
+    String query = normalize(playerName);
+    return playerRepository.searchByNameFragment(query).stream()
+        .map(this::toLocalCandidate)
+        .filter(Objects::nonNull)
+        .sorted(
+            java.util.Comparator.comparingDouble(AthleteCandidate::score)
+                .reversed()
+                .thenComparing(candidate -> candidate.active() != null && candidate.active() ? 0 : 1)
+                .thenComparing(candidate -> candidate.position() == null || candidate.position().isBlank() ? 1 : 0)
+                .thenComparing(AthleteCandidate::displayName, String.CASE_INSENSITIVE_ORDER))
+        .limit(5)
+        .toList();
+  }
+
+  private AthleteCandidate toLocalCandidate(Player player) {
+    if (player == null || player.getEspnAthleteId() == null || player.getEspnAthleteId().isBlank()) {
+      return null;
+    }
+
+    double score = scoreLocalCandidate(player);
+    return new AthleteCandidate(
+        player.getEspnAthleteId(),
+        player.getDisplayName(),
+        player.getFirstName(),
+        player.getLastName(),
+        player.getPosition(),
+        player.getJerseyNumber(),
+        player.getTeamName(),
+        player.getTeamId(),
+        player.getActive(),
+        score);
+  }
+
+  private double scoreLocalCandidate(Player player) {
+    String query = normalize(player.getDisplayName());
+    String displayName = normalize(player.getDisplayName());
+    String firstName = normalize(player.getFirstName());
+    String lastName = normalize(player.getLastName());
+
+    if (displayName.equals(query)) {
+      return 1.0d;
+    }
+
+    if ((firstName + " " + lastName).trim().equals(query)) {
+      return 0.98d;
+    }
+
+    if (displayName.contains(query)) {
+      return 0.92d;
+    }
+
+    return 0.75d;
+  }
+
+  private boolean hasStrongLocalMatch(List<AthleteCandidate> candidates) {
+    if (candidates.isEmpty()) {
+      return false;
+    }
+
+    AthleteCandidate topCandidate = candidates.get(0);
+    return topCandidate.score() >= 0.95d;
+  }
+
+  private void cacheCandidates(String cacheKey, List<AthleteCandidate> candidates) {
+    if (cacheKey == null || cacheKey.isBlank()) {
+      return;
+    }
+
+    candidateCache.put(cacheKey, new CachedCandidates(List.copyOf(candidates), clock.instant()));
+  }
+
+  private List<AthleteCandidate> mergeCandidates(
+      List<AthleteCandidate> left, List<AthleteCandidate> right, int maxCandidates) {
+    return java.util.stream.Stream.concat(left.stream(), right.stream())
+        .filter(Objects::nonNull)
+        .collect(java.util.stream.Collectors.toMap(
+            AthleteCandidate::espnAthleteId,
+            candidate -> candidate,
+            (existing, replacement) -> replacement.score() >= existing.score() ? replacement : existing))
+        .values()
+        .stream()
+        .sorted(
+            java.util.Comparator.comparingDouble(AthleteCandidate::score)
+                .reversed()
+                .thenComparing(AthleteCandidate::displayName, String.CASE_INSENSITIVE_ORDER))
+        .limit(maxCandidates)
+        .toList();
+  }
+
+  private String normalize(String value) {
+    if (value == null) {
+      return "";
+    }
+
+    return value.trim().toLowerCase(Locale.ROOT);
+  }
+
+  private record CachedCandidates(List<AthleteCandidate> candidates, java.time.Instant cachedAt) {
+    private boolean isExpired(java.time.Instant now) {
+      return cachedAt == null || now.isAfter(cachedAt.plus(SEARCH_CACHE_TTL_MINUTES, ChronoUnit.MINUTES));
+    }
   }
 }
