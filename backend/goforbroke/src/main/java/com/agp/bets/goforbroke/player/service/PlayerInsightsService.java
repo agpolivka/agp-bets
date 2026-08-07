@@ -62,7 +62,7 @@ public class PlayerInsightsService {
 
     teamRefreshService.requestRefreshIfStale(player.getTeamId());
 
-    List<PlayerGameStat> stats = playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
+    List<PlayerGameStat> stats = playerGameStatRepository.findAllByPlayer_IdOrderBySeasonDescWeekDesc(player.getId());
     List<PlayerGameStat> recentStats = stats.stream().limit(DEFAULT_RECENT_GAME_WINDOW).toList();
 
     PlayerStatInsightSummary overallSummary = summarize(stats);

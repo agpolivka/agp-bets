@@ -26,46 +26,42 @@ public class PlayerGameStatService {
   private final PlayerGameStatRepository playerGameStatRepository;
   private final EspnPlayerClient espnPlayerClient;
   private final ObjectMapper objectMapper;
+  private final PlayerHistoryBackfillService playerHistoryBackfillService;
   private final Clock clock = Clock.systemUTC();
 
   public PlayerGameStatService(
       PlayerRepository playerRepository,
       PlayerGameStatRepository playerGameStatRepository,
       EspnPlayerClient espnPlayerClient,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      PlayerHistoryBackfillService playerHistoryBackfillService) {
     this.playerRepository = playerRepository;
     this.playerGameStatRepository = playerGameStatRepository;
     this.espnPlayerClient = espnPlayerClient;
     this.objectMapper = objectMapper;
+    this.playerHistoryBackfillService = playerHistoryBackfillService;
   }
 
   @Transactional(readOnly = true)
   public List<PlayerGameStat> listStatsForAthleteId(String athleteId) {
     Player player = getPlayerByAthleteId(athleteId);
-    return playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
+    return playerGameStatRepository.findAllByPlayer_IdOrderBySeasonDescWeekDesc(player.getId());
   }
 
+  // Game-log history now comes from the R/nflverse backfill (see PlayerHistoryBackfillService)
+  // instead of the ESPN season-loop below. loadHistoricalSnapshots/upsertGameStat/
+  // shouldRefreshStats are kept temporarily as a rollback path until the R data is proven out in
+  // real use, but are no longer called from here.
   public List<PlayerGameStat> syncStatsForAthleteId(String athleteId) {
     Player player = getPlayerByAthleteId(athleteId);
     List<PlayerGameStat> existingStats =
-        playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
+        playerGameStatRepository.findAllByPlayer_IdOrderBySeasonDescWeekDesc(player.getId());
 
-    if (!shouldRefreshStats(player.getId(), existingStats)) {
-      return existingStats;
+    if (existingStats.isEmpty()) {
+      playerHistoryBackfillService.requestBackfillIfNeeded(athleteId);
     }
 
-    Instant now = clock.instant();
-    List<PlayerGameStatSnapshot> snapshots = loadHistoricalSnapshots(player, athleteId, now);
-
-    for (PlayerGameStatSnapshot snapshot : snapshots) {
-      if (snapshot.gameDate() == null) {
-        continue;
-      }
-
-      upsertGameStat(player, snapshot, now);
-    }
-
-    return playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(player.getId());
+    return existingStats;
   }
 
   private List<PlayerGameStatSnapshot> loadHistoricalSnapshots(

@@ -52,7 +52,7 @@ class PlayerInsightsServiceTest {
         stat("2026-09-15", "home", "Seattle Seahawks", "26", 300, 20, 2, 0, 2, 2, 3, 22, 1);
 
     when(playerRepository.findByEspnAthleteId("4426338")).thenReturn(Optional.of(player));
-    when(playerGameStatRepository.findAllByPlayer_IdOrderByGameDateDesc(1L))
+    when(playerGameStatRepository.findAllByPlayer_IdOrderBySeasonDescWeekDesc(1L))
         .thenReturn(List.of(game3, game2, game1));
     when(upcomingOpponentLookupService.findUpcomingOpponent("7"))
         .thenReturn(Optional.of(new UpcomingOpponent("26", "Seattle Seahawks", LocalDate.parse("2026-10-01"))));

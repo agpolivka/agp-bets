@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Stopping PostgreSQL..."
-docker compose down
+docker compose down || echo "Warning: could not stop PostgreSQL via docker compose (is Docker Desktop running?)"
 
 kill_pid_file() {
   local pid_file="$1"

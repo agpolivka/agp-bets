@@ -1,28 +1,22 @@
 package com.agp.bets.goforbroke.player.web.dto;
 
-import com.agp.bets.goforbroke.player.derived.model.PlayerPrediction;
 import java.time.Instant;
-import java.util.Map;
+import java.util.List;
 
 public record PlayerPredictionResponse(
     String athleteId,
     String displayName,
     String position,
-    Map<String, PredictionBandResponse> projections,
+    List<PredictionSummaryResponse> projections,
     double confidenceScore,
     Instant generatedAt) {
 
-  public static PlayerPredictionResponse from(PlayerPrediction prediction) {
-    return new PlayerPredictionResponse(
-        prediction.athleteId(),
-        prediction.displayName(),
-        prediction.position(),
-        prediction.projections().entrySet().stream()
-            .collect(
-                java.util.stream.Collectors.toMap(
-                    Map.Entry::getKey,
-                    entry -> PredictionBandResponse.from(entry.getValue()))),
-        prediction.confidenceScore(),
-        prediction.generatedAt());
-  }
+  public record PredictionSummaryResponse(
+      String metric,
+      double mean,
+      double lowerBound,
+      double upperBound,
+      int sampleSize,
+      double opponentAdjustment,
+      List<String> notes) {}
 }

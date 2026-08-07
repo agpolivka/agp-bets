@@ -8,7 +8,6 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
-import jakarta.persistence.Lob;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -77,7 +76,6 @@ public class TeamDefenseGameStat {
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 
-  @Lob
   @Column(nullable = false, columnDefinition = "TEXT")
   private String rawPayload;
 

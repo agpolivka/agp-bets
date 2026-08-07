@@ -215,6 +215,29 @@ The backend includes an admin-style metadata refresh endpoint for fixing stale p
 
 This scans stored players that are missing team, position, team id, or active status, then refreshes them from ESPN and persists the updated values.
 
+### ETL pipeline
+
+The repository now has a dedicated offline ETL area in [`etl/`](c:\Users\agpol\development\betting-model\agp-bets\etl\README.md).
+
+That folder is where batch NFL data work lives:
+
+- `etl/r/import_players.R` for nflverse player catalog imports
+- `etl/r/import_player_weekly_stats.R` for nflverse weekly player stat imports
+- `etl/r/import_teams.R` for nflverse team reference data
+- `etl/r/import_schedules.R` for nflverse schedules
+
+These jobs are intended to run outside the normal request path. The live Java app reads
+from PostgreSQL, while R handles backfills, refreshes, and batch imports.
+
+Recommended ETL trigger model:
+
+- Run player/team/schedule imports on a schedule or as a manual admin/backfill action.
+- Keep request-time player lookups inside Java and Postgres.
+- Use R for offline data refreshes rather than calling it from the frontend.
+
+If you want a quick local test, each script accepts small-slice arguments so you can validate
+the pipeline without processing the full dataset.
+
 ### Player insights endpoint
 
 Derived player insights are computed from stored game logs rather than stored as a second source of truth.

@@ -14,6 +14,17 @@ to harden historical stat freshness.
 The premium or special-user layer should remain a future phase, after the derived-stat
 experience is strong enough to justify it.
 
+Current data-source direction:
+
+- Use `nflverse` as the main historical NFL data source for modeling and backfill work.
+- Keep ESPN as a supplemental source for player lookup, headshots, and any missing live
+  metadata that nflverse does not provide cleanly.
+- Treat Java/Spring Boot as the application runtime and API layer.
+- Treat R as an offline ingestion/backfill utility, not something the frontend waits on
+  during a normal user request.
+- Keep Postgres as the shared source of truth for stored raw rows and derived summaries.
+- Run nflverse batch imports from the `etl/` folder rather than request-time Java calls.
+
 ## Recently Completed
 
 - Moved the frontend to React + Vite.
@@ -130,7 +141,30 @@ Implementation ideas:
 - Expand matchup features so predictions can account for the opponent more realistically.
 - Add optional future inputs for injury, weather, Vegas lines, and projected usage once the core system is stable.
 
-## Priority 5: Team Identity and Visuals
+## Priority 5: Data Pipeline and R Integration
+
+Goal: define a durable ingest path so historical and derived NFL data can grow without
+making the live app dependent on slow external calls.
+
+Desired behavior:
+
+- Use R for batch ingestion, backfills, and optional analytics jobs.
+- Keep Java responsible for serving stored data and orchestrating refresh jobs.
+- Make it easy to swap or add data sources later without rewriting the app layer.
+- Avoid having the frontend or live player page depend on synchronous R execution.
+- Prefer scheduled or manually triggered ETL runs over Java invoking R per request.
+
+Implementation ideas:
+
+- Define a small R-based ETL boundary for nflverse data.
+- Decide which datasets should be backfilled by R versus continued ESPN ingestion.
+- Write the derived data back into Postgres so Java can read it like any other stored row.
+- Keep the prediction layer pointing at stored data instead of live scraping calls.
+- Add a lightweight job pattern later if we want scheduled refreshes or batch imports.
+- Use the new ETL scripts as the first place to pull nflverse players, schedules, teams,
+  and weekly stats.
+
+## Priority 6: Team Identity and Visuals
 
 Goal: round out player pages with team-aware visuals once team data is modeled more cleanly.
 
@@ -146,7 +180,7 @@ Implementation ideas:
 - Avoid stuffing long-term team concerns directly into player-only components.
 - Reuse the current player visual card once team branding is ready.
 
-## Priority 6: Team Defense Data Foundation
+## Priority 7: Team Defense Data Foundation
 
 Goal: store enough team and defense history to support matchup-driven player insights and later predictions.
 
@@ -174,7 +208,7 @@ Implementation ideas:
   - investigating whether defensive scheme is available anywhere reliable
   - revisiting receiving-yards-allowed if ESPN exposes a better source than team passing totals
 
-## Priority 7: Candidate Matching Cleanup
+## Priority 8: Candidate Matching Cleanup
 
 Goal: keep search results tight and typo-tolerant as usage grows.
 
@@ -192,7 +226,7 @@ Implementation ideas:
 - Keep search output clean and player-centric.
 - Preserve typo tolerance without overwhelming the user with low-quality matches.
 
-## Priority 8: Performance and Responsiveness
+## Priority 9: Performance and Responsiveness
 
 Goal: make the app feel fast, especially for the two hottest user paths.
 
@@ -224,6 +258,7 @@ Implementation ideas:
 - Replace Hibernate-only schema generation with Flyway once the team tables and next database changes settle down.
 - After team data modeling is in place, introduce Flyway migrations and move away from
   relying on Hibernate schema creation as the long-term database strategy.
+- Add a simple ETL scheduler or runner once the batch scripts settle, rather than calling R from the live app.
 
 ## Working Agreement
 

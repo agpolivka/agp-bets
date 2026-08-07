@@ -26,3 +26,12 @@ agp:
     schedule:
       enabled: ${AGP_TEAM_REFRESH_SCHEDULE_ENABLED:false}
       cron: ${AGP_TEAM_REFRESH_SCHEDULE_CRON:0 0 */6 * * *}
+  etl:
+    r-executable: ${AGP_RSCRIPT_PATH:Rscript}
+    scripts-dir: ${AGP_ETL_SCRIPTS_DIR:../../etl/r}
+    max-concurrent-scripts: ${AGP_ETL_MAX_CONCURRENT_SCRIPTS:1}
+  player-history-backfill:
+    enabled: ${AGP_PLAYER_HISTORY_BACKFILL_ENABLED:true}
+  stats-refresh:
+    enabled: ${AGP_STATS_REFRESH_ENABLED:true}
+    poll-interval-ms: ${AGP_STATS_REFRESH_POLL_INTERVAL_MS:14400000}

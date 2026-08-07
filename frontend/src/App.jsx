@@ -4,6 +4,7 @@ import { featuredPlayers } from "./data/featuredPlayers";
 import {
   getPlayer,
   getPlayerInsights,
+  getPlayerPredictions,
   getTeam,
   getTeamDefenseSummary,
   searchPlayers,
@@ -101,6 +102,14 @@ function formatPace(value) {
   }
 
   return Number(value).toFixed(1);
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "-";
+  }
+
+  return `${Math.round(Number(value) * 100)}%`;
 }
 
 function formatNullablePace(value, suffix = "") {
@@ -515,6 +524,29 @@ function UpcomingOpponentCard({ upcomingOpponent, opponentTeam, opponentDefense,
   );
 }
 
+function PredictionCard({ prediction }) {
+  return (
+    <article className="prediction-card">
+      <div className="prediction-card-head">
+        <div>
+          <span className="summary-label">{prediction.metric}</span>
+          <strong>{formatPace(prediction.mean)}</strong>
+        </div>
+        <span className="status-pill live">{formatPercent(prediction.confidence)}</span>
+      </div>
+
+      <p>
+        Range {formatPace(prediction.lowerBound)} to {formatPace(prediction.upperBound)}
+      </p>
+      <p>
+        Sample: {formatNumber(prediction.sampleSize)} | Opponent adjustment{" "}
+        {formatPace(prediction.opponentAdjustment)}
+      </p>
+      {prediction.notes ? <p className="prediction-notes">{prediction.notes}</p> : null}
+    </article>
+  );
+}
+
 function PlayerDetailPage() {
   const { athleteId } = useParams();
   const location = useLocation();
@@ -523,6 +555,8 @@ function PlayerDetailPage() {
   const [playerTeam, setPlayerTeam] = useState(null);
   const [opponentTeam, setOpponentTeam] = useState(null);
   const [opponentDefense, setOpponentDefense] = useState(null);
+  const [predictions, setPredictions] = useState(null);
+  const [predictionLoading, setPredictionLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [headshotFailed, setHeadshotFailed] = useState(false);
@@ -541,6 +575,8 @@ function PlayerDetailPage() {
       setPlayerTeam(null);
       setOpponentTeam(null);
       setOpponentDefense(null);
+      setPredictions(null);
+      setPredictionLoading(true);
 
       try {
         let playerResponse;
@@ -594,6 +630,21 @@ function PlayerDetailPage() {
         if (!canceled) {
           setPlayer(freshPlayer);
           setInsights(insightsResponse);
+        }
+
+        try {
+          const predictionResponse = await getPlayerPredictions(athleteId);
+          if (!canceled) {
+            setPredictions(predictionResponse);
+          }
+        } catch {
+          if (!canceled) {
+            setPredictions(null);
+          }
+        } finally {
+          if (!canceled) {
+            setPredictionLoading(false);
+          }
         }
 
         const teamRequests = [];
@@ -706,6 +757,54 @@ function PlayerDetailPage() {
 
         {!loading && insights ? (
           <>
+            <section className="panel section">
+              <div className="section-head">
+                <div>
+                  <span className="section-kicker">Predictions</span>
+                  <h2>Early betting view</h2>
+                  <p>
+                    These are first-pass projections derived from recent production, season
+                    history, and the stored opponent context.
+                  </p>
+                </div>
+              </div>
+
+              <div className="method-note">
+                <strong>How this works</strong>
+                <p>
+                  We blend recent and season-long game logs, skip quarterback receiving props, and
+                  cache the result briefly so repeat page loads stay quick.
+                </p>
+              </div>
+
+              {predictionLoading ? (
+                <div className="empty-state">
+                  <div className="loading-row">
+                    <span className="loading-spinner" />
+                    <span>Generating prediction snapshot...</span>
+                  </div>
+                </div>
+              ) : null}
+
+              {!predictionLoading && predictions?.projections?.length ? (
+                <div className="prediction-grid">
+                  {predictions.projections.map((prediction) => (
+                    <PredictionCard
+                      key={prediction.metric}
+                      prediction={{
+                        ...prediction,
+                        confidence: predictions.confidenceScore,
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {!predictionLoading && !predictions?.projections?.length ? (
+                <p className="candidate-meta">Prediction snapshot is unavailable right now.</p>
+              ) : null}
+            </section>
+
             <section className="panel section">
               <div className="section-head">
                 <div>

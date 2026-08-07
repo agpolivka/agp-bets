@@ -55,6 +55,10 @@ export function getPlayerInsights(athleteId) {
   return request(`/api/players/${encodeURIComponent(athleteId)}/insights`);
 }
 
+export function getPlayerPredictions(athleteId) {
+  return request(`/api/players/${encodeURIComponent(athleteId)}/predictions`);
+}
+
 export function getTeam(teamId) {
   return request(`/api/teams/${encodeURIComponent(teamId)}`);
 }

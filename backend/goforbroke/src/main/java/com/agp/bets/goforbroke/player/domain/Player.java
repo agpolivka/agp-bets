@@ -6,7 +6,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import lombok.AllArgsConstructor;
@@ -55,7 +54,6 @@ public class Player {
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 
-  @Lob
   @Column(nullable = false, columnDefinition = "TEXT")
   private String rawPayload;
 
