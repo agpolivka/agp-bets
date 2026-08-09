@@ -24,10 +24,6 @@ public class EspnPlayerClient {
       "https://sports.core.api.espn.com/v3/sports/football/nfl/athletes";
   private static final String ATHLETE_PROFILE_ENDPOINT =
       "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes";
-  private static final String ATHLETE_STATISTICS_LOG_ENDPOINT =
-      "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes";
-  private static final String ATHLETE_GAME_LOG_PAGE =
-      "https://www.espn.com/nfl/player/gamelog/_/id";
   private static final String USER_AGENT = "Mozilla/5.0";
   private static final int ATHLETE_PAGE_LIMIT = 1000;
   private static final int MAX_ATHLETE_PAGES = 25;
@@ -50,22 +46,6 @@ public class EspnPlayerClient {
 
   public JsonNode fetchAthleteById(String athleteId) {
     return fetchJson(ATHLETE_PROFILE_ENDPOINT + "/" + athleteId);
-  }
-
-  public JsonNode fetchAthleteStatisticsLog(String athleteId) {
-    return fetchAthleteStatisticsLog(athleteId, null);
-  }
-
-  public JsonNode fetchAthleteStatisticsLog(String athleteId, Integer season) {
-    return fetchJson(buildAthleteStatisticsLogUrl(athleteId, season));
-  }
-
-  public String fetchAthleteGameLogPage(String athleteId, String displayName) {
-    return fetchAthleteGameLogPage(athleteId, displayName, null);
-  }
-
-  public String fetchAthleteGameLogPage(String athleteId, String displayName, Integer season) {
-    return fetchText(buildAthleteGameLogUrl(athleteId, displayName, season));
   }
 
   public Optional<JsonNode> findAthleteByDisplayName(String playerName) {
@@ -137,31 +117,6 @@ public class EspnPlayerClient {
     return ATHLETE_PROFILE_ENDPOINT + "/" + athleteId;
   }
 
-  public String buildAthleteStatisticsLogUrl(String athleteId) {
-    return buildAthleteStatisticsLogUrl(athleteId, null);
-  }
-
-  public String buildAthleteStatisticsLogUrl(String athleteId, Integer season) {
-    String url = ATHLETE_STATISTICS_LOG_ENDPOINT + "/" + athleteId + "/statisticslog";
-    if (season != null) {
-      url += "?season=" + season;
-    }
-    return url;
-  }
-
-  public String buildAthleteGameLogUrl(String athleteId, String displayName) {
-    return buildAthleteGameLogUrl(athleteId, displayName, null);
-  }
-
-  public String buildAthleteGameLogUrl(String athleteId, String displayName, Integer season) {
-    String slug = slugify(displayName);
-    String url = ATHLETE_GAME_LOG_PAGE + "/" + athleteId + "/" + slug;
-    if (season != null) {
-      url += "?season=" + season;
-    }
-    return url;
-  }
-
   private AthleteCandidate enrichCandidateFromAthleteDetails(AthleteCandidate candidate) {
     if (candidate == null) {
       return null;
@@ -224,32 +179,6 @@ public class EspnPlayerClient {
     }
   }
 
-  private String fetchText(String url) {
-    HttpRequest request =
-        HttpRequest.newBuilder(URI.create(url))
-            .timeout(Duration.ofSeconds(20))
-            .header("Accept", "text/html,application/xhtml+xml")
-            .header("User-Agent", USER_AGENT)
-            .GET()
-            .build();
-
-    try {
-      HttpResponse<String> response =
-          httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-      int statusCode = response.statusCode();
-      if (statusCode < 200 || statusCode >= 300) {
-        throw new EspnLookupException(
-            "ESPN request failed with status " + statusCode + " for " + url);
-      }
-      return response.body();
-    } catch (IOException exception) {
-      throw new EspnLookupException("Failed to read ESPN response from " + url, exception);
-    } catch (InterruptedException exception) {
-      Thread.currentThread().interrupt();
-      throw new EspnLookupException("Interrupted while calling ESPN for " + url, exception);
-    }
-  }
-
   private boolean isLastPage(JsonNode athletesPage) {
     JsonNode items = athletesPage.path("items");
     if (items.isArray() && items.isEmpty()) {
@@ -261,16 +190,6 @@ public class EspnPlayerClient {
     }
 
     return false;
-  }
-
-  private String slugify(String value) {
-    if (value == null || value.isBlank()) {
-      return "";
-    }
-
-    return value.toLowerCase()
-        .replaceAll("[^a-z0-9]+", "-")
-        .replaceAll("^-+|-+$", "");
   }
 
   private String normalize(String value) {

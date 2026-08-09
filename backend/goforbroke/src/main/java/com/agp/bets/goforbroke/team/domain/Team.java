@@ -57,16 +57,6 @@ public class Team {
 
   private String standingSummary;
 
-  private Integer seasonOffensiveGames;
-
-  private Integer seasonOffensivePoints;
-
-  private Integer seasonPassingYards;
-
-  private Integer seasonRushingYards;
-
-  private Integer seasonTotalYards;
-
   private String upcomingOpponentTeamId;
 
   private String upcomingOpponentName;

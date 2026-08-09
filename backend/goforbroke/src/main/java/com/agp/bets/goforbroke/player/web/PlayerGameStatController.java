@@ -32,6 +32,7 @@ public class PlayerGameStatController {
   @PostMapping("/sync")
   public PlayerGameStatSyncResponse syncStats(@PathVariable String espnAthleteId) {
     int syncedCount = playerGameStatService.syncStatsForAthleteId(espnAthleteId).size();
-    return new PlayerGameStatSyncResponse(espnAthleteId, syncedCount, clock.instant());
+    boolean backfillInProgress = playerGameStatService.isBackfillInProgress(espnAthleteId);
+    return new PlayerGameStatSyncResponse(espnAthleteId, syncedCount, backfillInProgress, clock.instant());
   }
 }

@@ -7,12 +7,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-/** Runs the stored-players stats refresh script when {@link StatsRefreshDueChecker} says it's due. */
+/**
+ * Runs the stored-players stats refresh and the team defense refresh when {@link
+ * StatsRefreshDueChecker} says it's due - both change on the same signal (a game completed), so
+ * they share one due-check instead of each needing their own. Neither script takes a season
+ * argument here; both default to nflverse's current season on their own.
+ */
 @Service
 public class StatsRefreshWorker {
 
   private static final Logger log = LoggerFactory.getLogger(StatsRefreshWorker.class);
-  private static final String SCRIPT_NAME = "refresh_stored_players_weekly.R";
+  private static final String PLAYER_STATS_SCRIPT_NAME = "refresh_stored_players_weekly.R";
+  private static final String TEAM_DEFENSE_SCRIPT_NAME = "import_team_defense.R";
 
   private final RScriptRunner rScriptRunner;
   private final StatsRefreshDueChecker statsRefreshDueChecker;
@@ -31,7 +37,8 @@ public class StatsRefreshWorker {
 
     try {
       if (statsRefreshDueChecker.isRefreshDue()) {
-        rScriptRunner.run(SCRIPT_NAME);
+        rScriptRunner.run(PLAYER_STATS_SCRIPT_NAME);
+        rScriptRunner.run(TEAM_DEFENSE_SCRIPT_NAME);
       } else {
         log.debug("Stats refresh not due; skipping.");
       }

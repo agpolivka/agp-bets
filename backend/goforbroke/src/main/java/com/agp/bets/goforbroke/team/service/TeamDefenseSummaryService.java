@@ -13,6 +13,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class TeamDefenseSummaryService {
 
+  // Roughly one season - see PlayerPredictionService.DEFENSE_HISTORY_GAME_WINDOW for why this
+  // isn't unbounded: without a cap this blends every stored season together, so an old roster's
+  // defense weighs the same as the current one.
+  private static final int RECENT_GAME_WINDOW = 20;
+
   private final TeamRepository teamRepository;
   private final TeamDefenseGameStatRepository teamDefenseGameStatRepository;
 
@@ -32,7 +37,9 @@ public class TeamDefenseSummaryService {
   public TeamDefenseSummary getDefenseSummary(String espnTeamId) {
     Team team = getTeamByEspnId(espnTeamId);
     List<TeamDefenseGameStat> stats =
-        teamDefenseGameStatRepository.findAllByTeam_IdOrderByGameDateDesc(team.getId());
+        teamDefenseGameStatRepository.findAllByTeam_IdOrderByGameDateDesc(team.getId()).stream()
+            .limit(RECENT_GAME_WINDOW)
+            .toList();
 
     return new TeamDefenseSummary(
         stats.size(),

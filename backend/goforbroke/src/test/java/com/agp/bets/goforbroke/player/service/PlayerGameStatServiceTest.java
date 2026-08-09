@@ -10,7 +10,6 @@ import com.agp.bets.goforbroke.player.domain.Player;
 import com.agp.bets.goforbroke.player.domain.PlayerGameStat;
 import com.agp.bets.goforbroke.player.repository.PlayerGameStatRepository;
 import com.agp.bets.goforbroke.player.repository.PlayerRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -22,17 +21,11 @@ class PlayerGameStatServiceTest {
   private final PlayerRepository playerRepository = Mockito.mock(PlayerRepository.class);
   private final PlayerGameStatRepository playerGameStatRepository =
       Mockito.mock(PlayerGameStatRepository.class);
-  private final EspnPlayerClient espnPlayerClient = Mockito.mock(EspnPlayerClient.class);
-  private final ObjectMapper objectMapper = new ObjectMapper();
   private final PlayerHistoryBackfillService playerHistoryBackfillService =
       Mockito.mock(PlayerHistoryBackfillService.class);
   private final PlayerGameStatService service =
       new PlayerGameStatService(
-          playerRepository,
-          playerGameStatRepository,
-          espnPlayerClient,
-          objectMapper,
-          playerHistoryBackfillService);
+          playerRepository, playerGameStatRepository, playerHistoryBackfillService);
 
   @Test
   void syncStatsForAthleteIdReturnsExistingRowsWithoutTriggeringBackfill() {

@@ -2,7 +2,6 @@ package com.agp.bets.goforbroke.team.service;
 
 import com.agp.bets.goforbroke.player.repository.PlayerRepository;
 import com.agp.bets.goforbroke.team.domain.Team;
-import com.agp.bets.goforbroke.team.domain.TeamDefenseGameStat;
 import com.agp.bets.goforbroke.team.repository.TeamDefenseGameStatRepository;
 import com.agp.bets.goforbroke.team.repository.TeamRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -15,13 +14,19 @@ import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.time.Year;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Team identity (name, logo, venue, record/standing summary, upcoming opponent) stays ESPN-
+ * sourced here. Defensive game stats ({@code TeamDefenseGameStat}) are populated by
+ * {@code etl/r/import_team_defense.R} instead (see {@link StatsRefreshWorker} in the etl
+ * package) - nflverse gives the whole league in one vectorized pull rather than needing an ESPN
+ * game-summary fetch per completed game per team, and this class no longer touches that data at
+ * all.
+ */
 @Service
 @Transactional
 public class TeamSyncService {
@@ -78,7 +83,7 @@ public class TeamSyncService {
 
     JsonNode teamNode = espnTeamClient.fetchTeamById(teamId);
     Team team = upsertTeam(teamNode, clock.instant());
-    syncTeamDefenseGames(team);
+    hydrateSeasonContext(team);
     return team;
   }
 
@@ -106,39 +111,16 @@ public class TeamSyncService {
         teamIds.size(), teamsSynced, defensiveGamesSynced, failedTeamIds, clock.instant());
   }
 
-  private void syncTeamDefenseGames(Team team) {
+  // Record/standing summary and upcoming opponent - the identity-adjacent context that stays on
+  // ESPN. hydrateUpcomingOpponent only mutates the in-memory team, so this ends with an explicit
+  // save to persist whatever it set on the last iterated season.
+  private void hydrateSeasonContext(Team team) {
     int currentYear = Year.now(clock).getValue();
-    int offensiveGames = 0;
-    int offensivePoints = 0;
-    int passingYards = 0;
-    int rushingYards = 0;
-    int totalYards = 0;
     for (int season = currentYear - TEAM_HISTORY_BACKFILL_YEARS + 1; season <= currentYear; season++) {
       JsonNode schedule = espnTeamClient.fetchTeamSchedule(team.getEspnTeamId(), season);
       hydrateSeasonSummary(team, schedule);
       hydrateUpcomingOpponent(team, schedule);
-
-      for (JsonNode event : schedule.path("events")) {
-        if (!isCompletedEvent(event)) {
-          continue;
-        }
-
-        JsonNode summary = espnTeamClient.fetchGameSummary(event.path("id").asText());
-        upsertDefenseGame(team, event, summary, clock.instant());
-        Map<String, JsonNode> teamStats = extractTeamBoxscoreStats(summary, team.getEspnTeamId());
-        offensiveGames++;
-        offensivePoints += parseInteger(findStat(teamStats, "points")) == null ? 0 : parseInteger(findStat(teamStats, "points"));
-        passingYards += parseInteger(findStat(teamStats, "netPassingYards")) == null ? 0 : parseInteger(findStat(teamStats, "netPassingYards"));
-        rushingYards += parseInteger(findStat(teamStats, "rushingYards")) == null ? 0 : parseInteger(findStat(teamStats, "rushingYards"));
-        totalYards += parseInteger(findStat(teamStats, "totalYards")) == null ? 0 : parseInteger(findStat(teamStats, "totalYards"));
-      }
     }
-
-    team.setSeasonOffensiveGames(offensiveGames);
-    team.setSeasonOffensivePoints(offensivePoints);
-    team.setSeasonPassingYards(passingYards);
-    team.setSeasonRushingYards(rushingYards);
-    team.setSeasonTotalYards(totalYards);
     teamRepository.save(team);
   }
 
@@ -217,79 +199,6 @@ public class TeamSyncService {
     }
   }
 
-  private void upsertDefenseGame(Team team, JsonNode event, JsonNode summary, Instant now) {
-    LocalDate gameDate = parseDate(event.path("date").asText(null));
-    if (gameDate == null) {
-      return;
-    }
-
-    Optional<TeamDefenseGameStat> existing =
-        teamDefenseGameStatRepository.findByTeam_IdAndGameDate(team.getId(), gameDate);
-    TeamDefenseGameStat stat = existing.orElseGet(TeamDefenseGameStat::new);
-
-    JsonNode competition = event.path("competitions").path(0);
-    JsonNode teamCompetitor = findCompetitor(competition, team.getEspnTeamId());
-    JsonNode opponentCompetitor = findOpponentCompetitor(competition, team.getEspnTeamId());
-    Map<String, JsonNode> opponentStats = extractTeamBoxscoreStats(summary, opponentCompetitor.path("team").path("id").asText());
-
-    stat.setTeam(team);
-    stat.setGameDate(gameDate);
-    stat.setSeason(event.path("season").path("year").asInt());
-    stat.setSeasonType(event.path("seasonType").path("type").asInt());
-    stat.setWeek(event.path("week").path("number").asInt());
-    stat.setHomeAway(teamCompetitor.path("homeAway").asText(null));
-    stat.setOpponentTeamId(opponentCompetitor.path("team").path("id").asText(null));
-    stat.setOpponentName(opponentCompetitor.path("team").path("displayName").asText(null));
-    stat.setPointsAllowed(parseInteger(opponentCompetitor.path("score").path("value")));
-    stat.setTotalYardsAllowed(parseInteger(opponentStats.get("totalYards")));
-    Integer netPassingAllowed = parseInteger(opponentStats.get("netPassingYards"));
-    stat.setPassingYardsAllowed(netPassingAllowed);
-    stat.setReceivingYardsAllowed(netPassingAllowed);
-    stat.setRushingYardsAllowed(parseInteger(opponentStats.get("rushingYards")));
-    stat.setTurnoversForced(parseInteger(opponentStats.get("turnovers")));
-    stat.setInterceptions(parseInteger(opponentStats.get("interceptions")));
-    stat.setFumbleRecoveries(parseInteger(opponentStats.get("fumblesLost")));
-    stat.setSacks(parseSacks(opponentStats.get("sacksYardsLost")));
-    stat.setSourceUrl(espnTeamClient.buildGameSummaryUrl(event.path("id").asText()));
-    stat.setRawPayload(writeJson(summary));
-    stat.setFetchedAt(now);
-    stat.setCreatedAt(stat.getCreatedAt() == null ? now : stat.getCreatedAt());
-    stat.setUpdatedAt(now);
-
-    teamDefenseGameStatRepository.save(stat);
-  }
-
-  private Map<String, JsonNode> extractTeamBoxscoreStats(JsonNode summary, String teamId) {
-    Map<String, JsonNode> statsByName = new HashMap<>();
-    for (JsonNode teamBox : summary.path("boxscore").path("teams")) {
-      if (!teamId.equals(teamBox.path("team").path("id").asText())) {
-        continue;
-      }
-
-      for (JsonNode stat : teamBox.path("statistics")) {
-        String name = stat.path("name").asText();
-        if (!name.isBlank()) {
-          statsByName.put(name, stat);
-        }
-      }
-    }
-
-    return statsByName;
-  }
-
-  private JsonNode findStat(Map<String, JsonNode> statsByName, String name) {
-    return statsByName.get(name);
-  }
-
-  private JsonNode findCompetitor(JsonNode competition, String teamId) {
-    for (JsonNode competitor : competition.path("competitors")) {
-      if (teamId.equals(competitor.path("team").path("id").asText())) {
-        return competitor;
-      }
-    }
-    return competition.path("competitors").path(0);
-  }
-
   private JsonNode findOpponentCompetitor(JsonNode competition, String teamId) {
     for (JsonNode competitor : competition.path("competitors")) {
       if (!teamId.equals(competitor.path("team").path("id").asText())) {
@@ -297,10 +206,6 @@ public class TeamSyncService {
       }
     }
     return competition.path("competitors").path(0);
-  }
-
-  private boolean isCompletedEvent(JsonNode event) {
-    return event.path("competitions").path(0).path("status").path("type").path("completed").asBoolean(false);
   }
 
   private List<JsonNode> extractEventNodes(JsonNode schedule) {
@@ -350,48 +255,6 @@ public class TeamSyncService {
     } catch (RuntimeException exception) {
       return null;
     }
-  }
-
-  private Integer parseInteger(JsonNode statNode) {
-    if (statNode == null || statNode.isMissingNode() || statNode.isNull()) {
-      return null;
-    }
-
-    if (statNode.isNumber()) {
-      return statNode.asInt();
-    }
-
-    JsonNode valueNode = statNode.path("value");
-    if (valueNode.isNumber()) {
-      return valueNode.asInt();
-    }
-
-    String displayValue = statNode.path("displayValue").asText(null);
-    if (displayValue == null || displayValue.isBlank()) {
-      return null;
-    }
-
-    String normalized = displayValue.replace(",", "").trim();
-    if (normalized.matches("-?\\d+")) {
-      return Integer.parseInt(normalized);
-    }
-
-    return null;
-  }
-
-  private Integer parseSacks(JsonNode statNode) {
-    if (statNode == null || statNode.isMissingNode() || statNode.isNull()) {
-      return null;
-    }
-
-    String displayValue = statNode.path("displayValue").asText(null);
-    if (displayValue == null || displayValue.isBlank()) {
-      return parseInteger(statNode);
-    }
-
-    String[] parts = displayValue.split("-");
-    String firstPart = parts[0].trim();
-    return firstPart.matches("\\d+") ? Integer.parseInt(firstPart) : null;
   }
 
   private String textValue(JsonNode node, String fieldName) {

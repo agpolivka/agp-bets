@@ -16,6 +16,8 @@ const SEARCH_RESULT_LIMIT = 5;
 const SEARCH_RESULT_THRESHOLD = 0.25;
 const MATCHUP_RETRY_ATTEMPTS = 2;
 const MATCHUP_RETRY_DELAY_MS = 1500;
+const BACKFILL_POLL_ATTEMPTS = 8;
+const BACKFILL_POLL_DELAY_MS = 2000;
 
 function buildEspnHeadshotUrl(athleteId) {
   if (!athleteId) {
@@ -104,12 +106,26 @@ function formatPace(value) {
   return Number(value).toFixed(1);
 }
 
-function formatPercent(value) {
+const PREDICTION_METRIC_META = {
+  passingYards: { label: "Passing Yards", unit: "yds", decimals: 0 },
+  rushingYards: { label: "Rushing Yards", unit: "yds", decimals: 0 },
+  receivingYards: { label: "Receiving Yards", unit: "yds", decimals: 0 },
+  receptions: { label: "Receptions", unit: "rec", decimals: 1 },
+  touchdowns: { label: "Touchdowns", unit: "TD", decimals: 1 },
+  passingTouchdowns: { label: "Passing TDs", unit: "TD", decimals: 1 },
+  turnovers: { label: "Turnovers", unit: "TO", decimals: 1 },
+};
+
+function predictionMetricMeta(metric) {
+  return PREDICTION_METRIC_META[metric] ?? { label: metric, unit: "", decimals: 1 };
+}
+
+function formatMetricValue(metric, value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "-";
   }
 
-  return `${Math.round(Number(value) * 100)}%`;
+  return Number(value).toFixed(predictionMetricMeta(metric).decimals);
 }
 
 function formatNullablePace(value, suffix = "") {
@@ -192,7 +208,7 @@ function AppShell({ children }) {
           <span className="brand-mark">AGP</span>
           <div>
             <strong>AGP Bets</strong>
-            <p>Player data now. Prediction engine next.</p>
+            <p>Player data and stat-line projections.</p>
           </div>
         </Link>
 
@@ -200,6 +216,7 @@ function AppShell({ children }) {
           <nav className="topnav" aria-label="Primary">
             <Link to="/">Search</Link>
             <a href="#featured">Featured</a>
+            <Link to="/faq">FAQ</Link>
             <a href="#login">Login</a>
           </nav>
         </div>
@@ -224,11 +241,6 @@ function SearchResultCard({ player }) {
       <p>
         {player.teamName ?? "Unknown team"} | {player.position ?? "Unknown position"}
       </p>
-
-      <div className="result-meta">
-        <span>{player.espnAthleteId ?? "No ESPN ID"}</span>
-        <span>{player.stored ? "Stored already" : "Ready to load"}</span>
-      </div>
     </Link>
   );
 }
@@ -525,23 +537,28 @@ function UpcomingOpponentCard({ upcomingOpponent, opponentTeam, opponentDefense,
 }
 
 function PredictionCard({ prediction }) {
+  const meta = predictionMetricMeta(prediction.metric);
+  const adjustment = Number(prediction.opponentAdjustment ?? 0);
+  const matchupTone = adjustment > 0.05 ? "favorable" : adjustment < -0.05 ? "tough" : null;
+
   return (
     <article className="prediction-card">
-      <div className="prediction-card-head">
-        <div>
-          <span className="summary-label">{prediction.metric}</span>
-          <strong>{formatPace(prediction.mean)}</strong>
-        </div>
-        <span className="status-pill live">{formatPercent(prediction.confidence)}</span>
+      <span className="summary-label">{meta.label}</span>
+
+      <div className="prediction-value">
+        <strong>{formatMetricValue(prediction.metric, prediction.mean)}</strong>
+        {meta.unit ? <span className="prediction-unit">{meta.unit}</span> : null}
       </div>
 
-      <p>
-        Range {formatPace(prediction.lowerBound)} to {formatPace(prediction.upperBound)}
-      </p>
-      <p>
-        Sample: {formatNumber(prediction.sampleSize)} | Opponent adjustment{" "}
-        {formatPace(prediction.opponentAdjustment)}
-      </p>
+      <div className="prediction-meta">
+        <span>{formatNumber(prediction.sampleSize)} games on record</span>
+        {matchupTone ? (
+          <span className={`matchup-pill matchup-${matchupTone}`}>
+            {matchupTone === "favorable" ? "Favorable matchup" : "Tough matchup"}
+          </span>
+        ) : null}
+      </div>
+
       {prediction.notes ? <p className="prediction-notes">{prediction.notes}</p> : null}
     </article>
   );
@@ -558,6 +575,7 @@ function PlayerDetailPage() {
   const [predictions, setPredictions] = useState(null);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [statsBackfilling, setStatsBackfilling] = useState(false);
   const [error, setError] = useState(null);
   const [headshotFailed, setHeadshotFailed] = useState(false);
 
@@ -577,6 +595,7 @@ function PlayerDetailPage() {
       setOpponentDefense(null);
       setPredictions(null);
       setPredictionLoading(true);
+      setStatsBackfilling(false);
 
       try {
         let playerResponse;
@@ -601,9 +620,32 @@ function PlayerDetailPage() {
         }
 
         try {
-          await syncPlayerStats(athleteId);
+          let syncResponse = await syncPlayerStats(athleteId);
+          let pollAttempt = 0;
+
+          // The backfill runs in the background and usually finishes in a few seconds - wait for
+          // it here (still showing the page's existing loading state) instead of revealing
+          // insights/predictions built from a handful of games while the rest of a player's
+          // history is still landing. If it runs long, give up after BACKFILL_POLL_ATTEMPTS
+          // rather than blocking the page indefinitely.
+          if (syncResponse?.backfillInProgress && !canceled) {
+            setStatsBackfilling(true);
+          }
+
+          while (syncResponse?.backfillInProgress && pollAttempt < BACKFILL_POLL_ATTEMPTS && !canceled) {
+            await sleep(BACKFILL_POLL_DELAY_MS);
+            if (canceled) {
+              break;
+            }
+            syncResponse = await syncPlayerStats(athleteId).catch(() => null);
+            pollAttempt += 1;
+          }
         } catch {
           // Keep the player page usable even if stats are still catching up.
+        } finally {
+          if (!canceled) {
+            setStatsBackfilling(false);
+          }
         }
 
         let freshPlayer;
@@ -753,7 +795,14 @@ function PlayerDetailPage() {
 
         {error ? <p className="inline-error">{error}</p> : null}
 
-        {loading ? <div className="empty-state">Loading player detail...</div> : null}
+        {loading ? (
+          <div className="empty-state">
+            <div className="loading-row">
+              <span className="loading-spinner" />
+              <span>{statsBackfilling ? "Loading full stat history..." : "Loading player detail..."}</span>
+            </div>
+          </div>
+        ) : null}
 
         {!loading && insights ? (
           <>
@@ -761,27 +810,18 @@ function PlayerDetailPage() {
               <div className="section-head">
                 <div>
                   <span className="section-kicker">Predictions</span>
-                  <h2>Early betting view</h2>
-                  <p>
-                    These are first-pass projections derived from recent production, season
-                    history, and the stored opponent context.
-                  </p>
+                  <h2>Projected Stat Line</h2>
                 </div>
-              </div>
-
-              <div className="method-note">
-                <strong>How this works</strong>
-                <p>
-                  We blend recent and season-long game logs, skip quarterback receiving props, and
-                  cache the result briefly so repeat page loads stay quick.
-                </p>
+                <Link className="faq-link" to="/faq">
+                  How this works
+                </Link>
               </div>
 
               {predictionLoading ? (
                 <div className="empty-state">
                   <div className="loading-row">
                     <span className="loading-spinner" />
-                    <span>Generating prediction snapshot...</span>
+                    <span>Building the projection...</span>
                   </div>
                 </div>
               ) : null}
@@ -789,13 +829,7 @@ function PlayerDetailPage() {
               {!predictionLoading && predictions?.projections?.length ? (
                 <div className="prediction-grid">
                   {predictions.projections.map((prediction) => (
-                    <PredictionCard
-                      key={prediction.metric}
-                      prediction={{
-                        ...prediction,
-                        confidence: predictions.confidenceScore,
-                      }}
-                    />
+                    <PredictionCard key={prediction.metric} prediction={prediction} />
                   ))}
                 </div>
               ) : null}
@@ -810,10 +844,6 @@ function PlayerDetailPage() {
                 <div>
                   <span className="section-kicker">Player snapshot</span>
                   <h2>Quick read on recent form</h2>
-                  <p>
-                    Start with the pace stats and short-term trends, then move into the game log
-                    for the full picture.
-                  </p>
                 </div>
               </div>
 
@@ -900,9 +930,6 @@ function PlayerDetailPage() {
                 <div>
                   <span className="section-kicker">Game log</span>
                   <h2>Recent game-by-game production</h2>
-                  <p>
-                    Review the latest box scores with opponent and home-away context for each game.
-                  </p>
                 </div>
               </div>
 
@@ -952,10 +979,6 @@ function PlayerDetailPage() {
                 <div>
                   <span className="section-kicker">Derived splits</span>
                   <h2>Home, away, and opponent samples</h2>
-                  <p>
-                    Use these smaller views to compare where a player has been producing and which
-                    matchups stand out in the stored sample.
-                  </p>
                 </div>
               </div>
 
@@ -1020,12 +1043,75 @@ function PlayerDetailPage() {
   );
 }
 
+const FAQ_ENTRIES = [
+  {
+    question: "How is the projected stat line calculated?",
+    answer:
+      "Each number blends the player's last 5 games with their season average (weighted 65/35 toward recent form), then adjusts for how the upcoming opponent's defense has played compared to the rest of the league this season.",
+  },
+  {
+    question: "Why don't you show a confidence range or score?",
+    answer:
+      "We used to show a range and a confidence badge next to every number, but a hedge isn't useful for a betting decision - you want a number to act on, not a spread of possibilities. We still compute both internally; they're just not on the page right now.",
+  },
+  {
+    question: "Where does the data come from?",
+    answer:
+      "Game logs and team defensive stats come from nflverse, a maintained public NFL dataset - not scraped from a live site, so it's stable and consistent across seasons. Player identity, team branding, and headshots still come from ESPN, since that's a better fit for that kind of lookup data.",
+  },
+  {
+    question: "How far back does the history go?",
+    answer:
+      "We backfill a player's full career, or at least the last 10 seasons, whichever is shorter for their actual career length. A rookie with one season on record will only show one season - there's nothing else to pull from yet.",
+  },
+  {
+    question: "How often does this update?",
+    answer:
+      "Stats refresh automatically after games complete, checked against the schedule rather than a fixed day/time - so Thursday, Saturday, Sunday, and Monday games are all covered without a special case for any of them.",
+  },
+  {
+    question: "What's not factored in yet?",
+    answer:
+      "Snap counts, drops, injury status, weather, and betting-market lines aren't part of the model yet. The opponent adjustment is also intentionally a small nudge, not the dominant factor, since it's not been backtested against real outcomes.",
+  },
+];
+
+function FaqPage() {
+  return (
+    <AppShell>
+      <main className="content">
+        <section className="panel section">
+          <Link className="back-link" to="/">
+            Back to search
+          </Link>
+          <div className="section-head">
+            <div>
+              <span className="section-kicker">FAQ</span>
+              <h2>How the predictions work</h2>
+            </div>
+          </div>
+
+          <div className="faq-list">
+            {FAQ_ENTRIES.map((entry) => (
+              <article key={entry.question} className="faq-entry">
+                <h3>{entry.question}</h3>
+                <p>{entry.answer}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      </main>
+    </AppShell>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/players/:athleteId" element={<PlayerDetailPage />} />
+        <Route path="/faq" element={<FaqPage />} />
       </Routes>
     </BrowserRouter>
   );

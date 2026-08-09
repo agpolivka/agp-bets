@@ -192,15 +192,6 @@ class EspnPlayerClientTest {
     assertEquals(List.of(1), requestedPages);
   }
 
-  @Test
-  void buildsAthleteGameLogUrl() {
-    EspnPlayerClient client = new EspnPlayerClient(objectMapper);
-
-    assertEquals(
-        "https://www.espn.com/nfl/player/gamelog/_/id/12483/matthew-stafford",
-        client.buildAthleteGameLogUrl("12483", "Matthew Stafford"));
-  }
-
   private JsonNode parse(String json) {
     try {
       return objectMapper.readTree(json);

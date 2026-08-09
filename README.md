@@ -195,6 +195,24 @@ To stop the stack from Git Bash:
 ./stop-dev.sh
 ```
 
+### Start backend only
+
+If you don't need the frontend running (e.g. testing the API directly), use the backend-only
+scripts instead - they still bring up PostgreSQL, just skip the frontend dev server:
+
+```powershell
+.\start-backend.ps1
+```
+
+```bash
+./start-backend.sh
+./stop-backend.sh
+```
+
+`stop-backend.sh` only stops the backend process; it leaves PostgreSQL running since other
+things (ETL scripts, another backend instance) may still depend on it. Use `stop-dev.sh` or
+`docker compose down` if you want PostgreSQL stopped too.
+
 ### Backend defaults
 
 The backend connects to PostgreSQL on `localhost:5432` by default.
@@ -222,18 +240,36 @@ The repository now has a dedicated offline ETL area in [`etl/`](c:\Users\agpol\d
 That folder is where batch NFL data work lives:
 
 - `etl/r/import_players.R` for nflverse player catalog imports
-- `etl/r/import_player_weekly_stats.R` for nflverse weekly player stat imports
+- `etl/r/import_player_weekly_stats.R` for nflverse weekly player stat imports, one season at a
+  time, full catalog - manual/admin use, not part of the automatic flow
+- `etl/r/import_player_history.R <espn_athlete_id>` for a single player's full-career game-log
+  backfill
+- `etl/r/refresh_stored_players_weekly.R` for a recurring current-season refresh of players
+  already stored in Postgres
 - `etl/r/import_teams.R` for nflverse team reference data
 - `etl/r/import_schedules.R` for nflverse schedules
 
 These jobs are intended to run outside the normal request path. The live Java app reads
-from PostgreSQL, while R handles backfills, refreshes, and batch imports.
+from PostgreSQL, while R handles backfills, refreshes, and batch imports. Historical player
+game-log stats are sourced from R/nflverse now rather than ESPN scraping - ESPN remains the
+source for player identity/roster metadata and headshots.
 
-Recommended ETL trigger model:
+ETL trigger model:
 
-- Run player/team/schedule imports on a schedule or as a manual admin/backfill action.
-- Keep request-time player lookups inside Java and Postgres.
-- Use R for offline data refreshes rather than calling it from the frontend.
+- `import_player_history.R` runs automatically (async, non-blocking) the first time a player is
+  searched with no stored game stats - see `PlayerHistoryBackfillService` in the backend.
+- `refresh_stored_players_weekly.R` runs on a data-driven schedule rather than a fixed cron: the
+  backend checks whether `nfl_schedules` shows a completed game more recent than the last
+  successful refresh, and runs the job if so, both on app startup and on a periodic poll (see
+  `StatsRefreshDueChecker` / `StatsRefreshScheduler`). This means it isn't tied to the app
+  running continuously, and it naturally covers Thursday/Saturday/Sunday/Monday games without
+  hardcoding game days.
+- `import_players.R`, `import_teams.R`, and `import_schedules.R` are still run manually/on-demand
+  for now. `nfl_schedules` in particular currently only has the 2025 season imported, which
+  limits `game_date`/`home_away` accuracy for players' older stored seasons until it's backfilled
+  further.
+- `Rscript` execution triggered from Java is capped at one concurrent script at a time
+  (`agp.etl.max-concurrent-scripts`), since each script loads a full nflverse season into memory.
 
 If you want a quick local test, each script accepts small-slice arguments so you can validate
 the pipeline without processing the full dataset.
@@ -258,11 +294,13 @@ The important part is that the raw `player_game_stats` rows stay as the durable 
 
 ### Player stats sync
 
-The stats sync flow now backfills historical game logs across multiple seasons when ESPN exposes them.
-
 - `POST /api/players/{espnAthleteId}/stats/sync`
 
-This refreshes stored game logs in an idempotent way by upserting game rows instead of deleting the history first.
+Returns whatever game-log rows are already stored for the player. If none are stored yet, this
+triggers an async R/nflverse backfill (`import_player_history.R`) in the background and returns
+immediately rather than blocking the request - the frontend's existing retry loop picks up the
+data once it lands, typically within several seconds. ESPN is no longer used for game-log
+history at all; the old ESPN game-log scraper has been removed from the codebase.
 
 ## Notes
 

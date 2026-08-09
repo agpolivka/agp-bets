@@ -23,6 +23,7 @@ class StatsRefreshWorkerTest {
     worker.refreshIfDueAsync().get();
 
     verify(rScriptRunner).run("refresh_stored_players_weekly.R");
+    verify(rScriptRunner).run("import_team_defense.R");
   }
 
   @Test
@@ -48,5 +49,6 @@ class StatsRefreshWorkerTest {
 
     verify(statsRefreshDueChecker, times(1)).isRefreshDue();
     verify(rScriptRunner, times(1)).run("refresh_stored_players_weekly.R");
+    verify(rScriptRunner, times(1)).run("import_team_defense.R");
   }
 }

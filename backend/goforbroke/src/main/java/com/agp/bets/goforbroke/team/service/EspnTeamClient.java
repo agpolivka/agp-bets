@@ -18,9 +18,12 @@ public class EspnTeamClient {
       "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams";
   private static final String TEAM_SCHEDULE_ENDPOINT =
       "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams";
-  private static final String GAME_SUMMARY_ENDPOINT =
-      "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary";
-  private static final String USER_AGENT = "Mozilla/5.0";
+  // This ESPN host (distinct from the ones EspnPlayerClient calls) blocks requests with no
+  // User-Agent header AND requests with a browser-impersonation-style value (e.g. plain
+  // "Mozilla/5.0", or Java's own default "Java-http-client/*") with a 403 - confirmed by direct
+  // testing. A UA that honestly identifies as a non-browser tool is allowed; curl's own default
+  // is the specific value verified to work.
+  private static final String USER_AGENT = "curl/8.16.0";
 
   private final HttpClient httpClient;
   private final ObjectMapper objectMapper;
@@ -43,10 +46,6 @@ public class EspnTeamClient {
     return fetchJson(buildTeamScheduleUrl(teamId, season));
   }
 
-  public JsonNode fetchGameSummary(String eventId) {
-    return fetchJson(buildGameSummaryUrl(eventId));
-  }
-
   public String buildTeamUrl(String teamId) {
     return TEAM_PROFILE_ENDPOINT + "/" + teamId;
   }
@@ -61,10 +60,6 @@ public class EspnTeamClient {
       url += "?season=" + season;
     }
     return url;
-  }
-
-  public String buildGameSummaryUrl(String eventId) {
-    return GAME_SUMMARY_ENDPOINT + "?event=" + eventId;
   }
 
   private JsonNode fetchJson(String url) {
