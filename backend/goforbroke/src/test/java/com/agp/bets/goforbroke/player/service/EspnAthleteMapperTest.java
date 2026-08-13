@@ -212,6 +212,52 @@ class EspnAthleteMapperTest {
   }
 
   @Test
+  void mapsInjuryStatusFromAthleteProfileWhenPresent() throws Exception {
+    JsonNode profileNode =
+        objectMapper.readTree(
+            """
+            {
+              "athlete": {
+                "id": "12483",
+                "displayName": "Matthew Stafford",
+                "status": {
+                  "id": "2",
+                  "name": "Questionable",
+                  "type": "questionable",
+                  "abbreviation": "Q"
+                }
+              }
+            }
+            """);
+
+    PlayerSnapshot snapshot =
+        EspnAthleteMapper.toSnapshot(
+            profileNode, "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/12483", Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals("Questionable", snapshot.injuryStatus());
+  }
+
+  @Test
+  void injuryStatusIsNullWhenEspnDoesNotReportOne() throws Exception {
+    JsonNode profileNode =
+        objectMapper.readTree(
+            """
+            {
+              "athlete": {
+                "id": "12483",
+                "displayName": "Matthew Stafford"
+              }
+            }
+            """);
+
+    PlayerSnapshot snapshot =
+        EspnAthleteMapper.toSnapshot(
+            profileNode, "https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes/12483", Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(null, snapshot.injuryStatus());
+  }
+
+  @Test
   void mapsNestedAthleteProfileTeamAndPositionWhenOnlyAthleteObjectContainsThem() throws Exception {
     JsonNode profileNode =
         objectMapper.readTree(

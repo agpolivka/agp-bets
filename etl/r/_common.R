@@ -37,7 +37,8 @@ to_json_text <- function(value) {
 
 # Shared final shaping step for both fetchers below. Expects a data frame that already has
 # nflverse's raw player-stats columns (including its own `season` column) plus game_date_home/
-# game_date_away joined in from nfl_schedules.
+# game_date_away and the weather/Vegas columns (roof/surface/temp/wind/spread_line_home/
+# spread_line_away/total_line) joined in from nfl_schedules.
 shape_player_week_stats <- function(joined) {
   joined |>
     mutate(
@@ -49,6 +50,19 @@ shape_player_week_stats <- function(joined) {
       ),
       opponent_name = opponent_team,
       opponent_team_id = opponent_team,
+      # roof/surface/temp/wind/total are the same regardless of home/away perspective.
+      roof = coalesce(roof_home, roof_away),
+      surface = coalesce(surface_home, surface_away),
+      temp_fahrenheit = coalesce(temp_home, temp_away),
+      wind_mph = coalesce(wind_home, wind_away),
+      game_total_line = coalesce(total_line_home, total_line_away),
+      # spread_line is home-team-perspective in nflverse (negative = home favored) - flip the sign
+      # for the away team so this always reads as "this player's own team is favored by X."
+      team_implied_spread = case_when(
+        !is.na(game_date_home) ~ -spread_line_home,
+        !is.na(game_date_away) ~ spread_line_away,
+        TRUE ~ NA_real_
+      ),
       games_played = 1L,
       passing_touchdowns = coalesce(passing_tds, 0L),
       rushing_touchdowns = coalesce(rushing_tds, 0L),
@@ -90,18 +104,29 @@ fetch_and_shape_player_week_stats <- function(con, season_arg, espn_athlete_ids 
   schedules <- tryCatch(
     dbGetQuery(
       con,
-      "select week, home_team, away_team, gameday from nfl_schedules where season = $1",
+      "select week, home_team, away_team, gameday, roof, surface, temp, wind, spread_line, total_line
+       from nfl_schedules where season = $1",
       params = list(season_arg)
     ),
     error = function(err) {
-      data.frame(week = integer(), home_team = character(), away_team = character(), gameday = as.Date(character()))
+      data.frame(
+        week = integer(), home_team = character(), away_team = character(), gameday = as.Date(character()),
+        roof = character(), surface = character(), temp = numeric(), wind = numeric(),
+        spread_line = numeric(), total_line = numeric()
+      )
     }
   )
 
   schedules_home <- schedules |>
-    transmute(week, team = home_team, game_date_home = as.Date(gameday))
+    transmute(
+      week, team = home_team, game_date_home = as.Date(gameday), roof_home = roof, surface_home = surface,
+      temp_home = temp, wind_home = wind, spread_line_home = spread_line, total_line_home = total_line
+    )
   schedules_away <- schedules |>
-    transmute(week, team = away_team, game_date_away = as.Date(gameday))
+    transmute(
+      week, team = away_team, game_date_away = as.Date(gameday), roof_away = roof, surface_away = surface,
+      temp_away = temp, wind_away = wind, spread_line_away = spread_line, total_line_away = total_line
+    )
 
   shaped <- nflreadr::load_player_stats(seasons = season_arg) |>
     filter(season == season_arg) |>
@@ -133,21 +158,31 @@ fetch_and_shape_player_week_stats_multi <- function(con, seasons, espn_athlete_i
   schedules <- tryCatch(
     dbGetQuery(
       con,
-      "select season, week, home_team, away_team, gameday from nfl_schedules where season between $1 and $2",
+      "select season, week, home_team, away_team, gameday, roof, surface, temp, wind, spread_line, total_line
+       from nfl_schedules where season between $1 and $2",
       params = list(min(seasons), max(seasons))
     ),
     error = function(err) {
       data.frame(
         season = integer(), week = integer(), home_team = character(), away_team = character(),
-        gameday = as.Date(character())
+        gameday = as.Date(character()), roof = character(), surface = character(), temp = numeric(),
+        wind = numeric(), spread_line = numeric(), total_line = numeric()
       )
     }
   )
 
   schedules_home <- schedules |>
-    transmute(season, week, team = home_team, game_date_home = as.Date(gameday))
+    transmute(
+      season, week, team = home_team, game_date_home = as.Date(gameday), roof_home = roof,
+      surface_home = surface, temp_home = temp, wind_home = wind, spread_line_home = spread_line,
+      total_line_home = total_line
+    )
   schedules_away <- schedules |>
-    transmute(season, week, team = away_team, game_date_away = as.Date(gameday))
+    transmute(
+      season, week, team = away_team, game_date_away = as.Date(gameday), roof_away = roof,
+      surface_away = surface, temp_away = temp, wind_away = wind, spread_line_away = spread_line,
+      total_line_away = total_line
+    )
 
   shaped <- nflreadr::load_player_stats(seasons = seasons) |>
     left_join(players, by = c("player_id" = "gsis_id")) |>
@@ -220,9 +255,11 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
         games_played, passing_yards, rushing_yards, total_yards, passing_touchdowns,
         rushing_touchdowns, receiving_touchdowns, touchdowns, total_touchdowns, interceptions,
         fumbles, fumbles_lost, turnovers, snap_count, carries, receiving_targets, receptions,
-        receiving_yards, drops, source_url, raw_payload, fetched_at, created_at, updated_at
+        receiving_yards, drops, roof, surface, temp_fahrenheit, wind_mph, team_implied_spread,
+        game_total_line, source_url, raw_payload, fetched_at, created_at, updated_at
       ) values (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
+        $26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37
       )
       ",
       params = list(
@@ -252,6 +289,12 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
         row$receptions[[1]],
         row$receiving_yards[[1]],
         row$drops[[1]],
+        row$roof[[1]],
+        row$surface[[1]],
+        row$temp_fahrenheit[[1]],
+        row$wind_mph[[1]],
+        row$team_implied_spread[[1]],
+        row$game_total_line[[1]],
         row$source_url[[1]],
         row$raw_payload[[1]],
         row$fetched_at[[1]],

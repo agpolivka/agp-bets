@@ -26,9 +26,14 @@ class PlayerPredictionServiceTest {
   private final TeamRepository teamRepository = Mockito.mock(TeamRepository.class);
   private final TeamDefenseGameStatRepository teamDefenseGameStatRepository =
       Mockito.mock(TeamDefenseGameStatRepository.class);
+  private final WeatherForecastClient weatherForecastClient = Mockito.mock(WeatherForecastClient.class);
   private final PlayerPredictionService service =
       new PlayerPredictionService(
-          playerRepository, playerGameStatRepository, teamRepository, teamDefenseGameStatRepository);
+          playerRepository,
+          playerGameStatRepository,
+          teamRepository,
+          teamDefenseGameStatRepository,
+          weatherForecastClient);
 
   @Test
   void opponentAdjustmentUsesRealLeagueAverageNotTheOldHardcodedBaseline() {
@@ -58,7 +63,7 @@ class PlayerPredictionServiceTest {
         .thenReturn(List.of(defenseGame(150), defenseGame(150)));
     // League-wide average (across every stored team, not just this opponent) is 120, not the old
     // hardcoded 110.0 constant.
-    when(teamDefenseGameStatRepository.findAllByGameDateAfter(Mockito.any()))
+    when(teamDefenseGameStatRepository.findAllByGameDateBetween(Mockito.any(), Mockito.any()))
         .thenReturn(List.of(defenseGame(100), defenseGame(120), defenseGame(140)));
 
     var response = service.getPredictionForAthleteId("4038815");
@@ -99,7 +104,8 @@ class PlayerPredictionServiceTest {
     when(teamDefenseGameStatRepository.findAllByTeam_IdOrderByGameDateDesc(26L))
         .thenReturn(List.of(defenseGame(150)));
     // No team-defense data stored anywhere yet.
-    when(teamDefenseGameStatRepository.findAllByGameDateAfter(Mockito.any())).thenReturn(List.of());
+    when(teamDefenseGameStatRepository.findAllByGameDateBetween(Mockito.any(), Mockito.any()))
+        .thenReturn(List.of());
 
     var response = service.getPredictionForAthleteId("4038815");
 
@@ -113,10 +119,40 @@ class PlayerPredictionServiceTest {
     assertEquals(3.2d, rushing.opponentAdjustment(), 0.0001d);
   }
 
+  @Test
+  void rushingQualityAdjustmentIsPositiveWhenPlayerBeatsLeagueAverageAfterContactRate() {
+    // League average is 2.6 yds/carry after contact (see PlayerPredictionService). This player
+    // averages 4.0 yds/carry after contact across 20 carries/game -> should nudge the projection up.
+    List<PlayerGameStat> recentStats =
+        List.of(
+            rushingGameWithContact(20, 80),
+            rushingGameWithContact(20, 80));
+
+    double adjustment = service.rushingQualityAdjustment("rushingYards", recentStats);
+
+    // (4.0 - 2.6) * 20 * 0.35 = 9.8
+    assertEquals(9.8d, adjustment, 0.0001d);
+  }
+
+  @Test
+  void rushingQualityAdjustmentIsZeroForNonRushingMetricsAndWhenNoContactDataStored() {
+    List<PlayerGameStat> recentStats = List.of(rushingGameWithContact(20, 80));
+
+    assertEquals(0.0d, service.rushingQualityAdjustment("receivingYards", recentStats), 0.0001d);
+    assertEquals(0.0d, service.rushingQualityAdjustment("rushingYards", List.of(rushingGame("2026-09-01", 100))), 0.0001d);
+  }
+
   private PlayerGameStat rushingGame(String gameDate, int rushingYards) {
     PlayerGameStat stat = new PlayerGameStat();
     stat.setGameDate(LocalDate.parse(gameDate));
     stat.setRushingYards(rushingYards);
+    return stat;
+  }
+
+  private PlayerGameStat rushingGameWithContact(int carries, int rushingYardsAfterContact) {
+    PlayerGameStat stat = new PlayerGameStat();
+    stat.setCarries(carries);
+    stat.setRushingYardsAfterContact(rushingYardsAfterContact);
     return stat;
   }
 

@@ -30,6 +30,8 @@ public class UpcomingOpponentLookupService {
                 new UpcomingOpponent(
                     team.getUpcomingOpponentTeamId(),
                     team.getUpcomingOpponentName(),
-                    team.getUpcomingGameDate()));
+                    team.getUpcomingGameDate(),
+                    team.getUpcomingGameTime(),
+                    team.getUpcomingGameIsHome()));
   }
 }

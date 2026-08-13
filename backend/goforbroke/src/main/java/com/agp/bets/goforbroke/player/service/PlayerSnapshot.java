@@ -12,6 +12,7 @@ public record PlayerSnapshot(
     String teamName,
     String teamId,
     Boolean active,
+    String injuryStatus,
     String sourceUrl,
     String rawPayload,
     Instant fetchedAt) {}

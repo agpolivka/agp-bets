@@ -55,7 +55,10 @@ class PlayerInsightsServiceTest {
     when(playerGameStatRepository.findAllByPlayer_IdOrderBySeasonDescWeekDesc(1L))
         .thenReturn(List.of(game3, game2, game1));
     when(upcomingOpponentLookupService.findUpcomingOpponent("7"))
-        .thenReturn(Optional.of(new UpcomingOpponent("26", "Seattle Seahawks", LocalDate.parse("2026-10-01"))));
+        .thenReturn(
+            Optional.of(
+                new UpcomingOpponent(
+                    "26", "Seattle Seahawks", LocalDate.parse("2026-10-01"), null, null)));
 
     var insights = service.getInsightsForAthleteId("4426338");
 

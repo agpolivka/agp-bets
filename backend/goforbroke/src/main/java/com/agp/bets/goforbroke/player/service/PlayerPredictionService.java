@@ -62,15 +62,18 @@ import org.springframework.transaction.annotation.Transactional;
 public class PlayerPredictionService {
 
   // How many of the player's most recent games count as "recent form" in the blend below.
-  private static final int RECENT_GAME_WINDOW = 5;
+  // Package-private (not private): PredictionBacktestService reuses this and the other tuning
+  // constants/helpers below so the backtest scores against the exact same math the live path uses,
+  // instead of risking a second, drifting copy of the algorithm.
+  static final int RECENT_GAME_WINDOW = 5;
   // Roughly one season (18 regular-season weeks + a playoff buffer) of an opponent's most recent
   // defensive games. Without this, opponentAdjustment blends every stored season together, so a
   // team's 2020 defense weighs exactly as much as their current one - capping to a recent window
   // keeps it reflecting the roster/scheme actually playing now.
-  private static final int DEFENSE_HISTORY_GAME_WINDOW = 20;
+  static final int DEFENSE_HISTORY_GAME_WINDOW = 20;
   // Same idea for the league-wide baseline, expressed as a date cutoff instead of a per-team game
   // count since it's a single query across every team, not ordered per-team.
-  private static final Duration LEAGUE_AVERAGES_LOOKBACK = Duration.ofDays(210);
+  static final Duration LEAGUE_AVERAGES_LOOKBACK = Duration.ofDays(210);
   // Predictions do several repository reads per request; cache briefly so repeat page loads and
   // the frontend's retry-on-load-failure loop don't recompute the same projection every time.
   private static final Duration CACHE_TTL = Duration.ofMinutes(20);
@@ -80,17 +83,34 @@ public class PlayerPredictionService {
   // normal projection so the first request right after a new player loads doesn't lock in a
   // near-zero number for the full CACHE_TTL while their history is still backfilling in the
   // background.
-  private static final int THIN_SAMPLE_GAME_THRESHOLD = 3;
+  static final int THIN_SAMPLE_GAME_THRESHOLD = 3;
   private static final Duration THIN_SAMPLE_CACHE_TTL = Duration.ofSeconds(15);
   private static final int CACHE_MAX_ENTRIES = 100;
   // League-wide defense averages change slowly (they're a season-long aggregate across every
   // stored team), so this is cached separately and longer than a single player's prediction.
   private static final Duration LEAGUE_AVERAGES_TTL = Duration.ofHours(6);
+  // Roughly the modern-NFL average Vegas game total. Used as the baseline gameConditionsAdjustment
+  // compares a real total_line against - when no real total is known (the live path doesn't have
+  // one yet, see gameConditionsAdjustment's doc), the "delta" against this baseline is zero, so the
+  // adjustment cleanly becomes a no-op rather than needing a separate null-check branch.
+  private static final double DEFAULT_GAME_TOTAL_LINE = 44.5d;
+  // Wind below this (mph) isn't treated as materially affecting passing - roughly where
+  // broadcasters/bettors start actually calling out wind as a real factor.
+  private static final double WIND_EFFECT_THRESHOLD_MPH = 10.0d;
+  // PFR-reported ballpark for league-wide yards-after-contact per carry (roughly where recent
+  // seasons land); a hand-picked estimate, not computed from this database's own stored data like
+  // leagueDefenseAverages is - flagged the same way the class doc flags every other constant here.
+  private static final double LEAGUE_AVERAGE_AFTER_CONTACT_YARDS_PER_CARRY = 2.6d;
+  // Small on purpose (see gameConditionsAdjustment/opponentAdjustment for the same pattern) - this
+  // is a quality tilt on top of the yardage the blend already projects, not a second independent
+  // predictor of rushing volume.
+  private static final double AFTER_CONTACT_QUALITY_COEFFICIENT = 0.35d;
 
   private final PlayerRepository playerRepository;
   private final PlayerGameStatRepository playerGameStatRepository;
   private final TeamRepository teamRepository;
   private final TeamDefenseGameStatRepository teamDefenseGameStatRepository;
+  private final WeatherForecastClient weatherForecastClient;
   private final Clock clock = Clock.systemUTC();
   // Simple TTL + LRU cache, keyed by ESPN athlete id. LinkedHashMap in access-order mode with
   // removeEldestEntry gives LRU eviction for free once the cache exceeds CACHE_MAX_ENTRIES.
@@ -108,11 +128,13 @@ public class PlayerPredictionService {
       PlayerRepository playerRepository,
       PlayerGameStatRepository playerGameStatRepository,
       TeamRepository teamRepository,
-      TeamDefenseGameStatRepository teamDefenseGameStatRepository) {
+      TeamDefenseGameStatRepository teamDefenseGameStatRepository,
+      WeatherForecastClient weatherForecastClient) {
     this.playerRepository = playerRepository;
     this.playerGameStatRepository = playerGameStatRepository;
     this.teamRepository = teamRepository;
     this.teamDefenseGameStatRepository = teamDefenseGameStatRepository;
+    this.weatherForecastClient = weatherForecastClient;
   }
 
   public PlayerPredictionResponse getPredictionForAthleteId(String athleteId) {
@@ -147,10 +169,14 @@ public class PlayerPredictionService {
                 .toList();
 
     LeagueDefenseAverages leagueAverages = leagueDefenseAverages();
+    GameConditions conditions = resolveLiveGameConditions(currentTeam);
     List<String> metrics = metricsForPosition(position);
     List<PlayerPredictionResponse.PredictionSummaryResponse> projections =
         metrics.stream()
-            .map(metric -> buildProjection(metric, recentStats, stats, position, opponentDefenseHistory, leagueAverages))
+            .map(
+                metric ->
+                    buildProjection(
+                        metric, recentStats, stats, position, opponentDefenseHistory, leagueAverages, conditions))
             .toList();
 
     PlayerPredictionResponse response =
@@ -168,19 +194,59 @@ public class PlayerPredictionService {
   }
 
   /**
+   * Resolves what {@link #gameConditionsAdjustment} can actually know about a player's upcoming
+   * game: the host stadium's roof (from {@code Team.venueIndoor}, static/known in advance) and, for
+   * outdoor games within the forecast window, a live wind forecast. Falls back to {@link
+   * GameConditions#UNKNOWN} whenever any piece is missing (stale/unsynced team, no upcoming game
+   * on file, host team not resolvable) rather than guessing - an unknown condition is a no-op
+   * adjustment, not a wrong one.
+   */
+  private GameConditions resolveLiveGameConditions(Team currentTeam) {
+    if (currentTeam == null
+        || currentTeam.getUpcomingGameIsHome() == null
+        || currentTeam.getUpcomingGameTime() == null) {
+      return GameConditions.UNKNOWN;
+    }
+
+    Team hostTeam =
+        Boolean.TRUE.equals(currentTeam.getUpcomingGameIsHome())
+            ? currentTeam
+            : (currentTeam.getUpcomingOpponentTeamId() == null
+                ? null
+                : teamRepository.findByEspnTeamId(currentTeam.getUpcomingOpponentTeamId()).orElse(null));
+    if (hostTeam == null) {
+      return GameConditions.UNKNOWN;
+    }
+
+    // ESPN's venueIndoor doesn't distinguish "dome" from "retractable, currently closed" - treating
+    // anything not explicitly indoor as outdoors is an approximation, same spirit as this file's
+    // other hand-picked constants.
+    String roof = Boolean.TRUE.equals(hostTeam.getVenueIndoor()) ? "dome" : "outdoors";
+    GameConditions baseConditions = new GameConditions(roof, null, null);
+    if (!baseConditions.isOutdoors() || hostTeam.getAbbreviation() == null) {
+      return baseConditions;
+    }
+
+    WeatherForecastClient.Forecast forecast =
+        weatherForecastClient.forecastFor(hostTeam.getAbbreviation(), currentTeam.getUpcomingGameTime());
+    return forecast == null ? baseConditions : new GameConditions(roof, forecast.windMph(), null);
+  }
+
+  /**
    * Core projection for one stat (e.g. "rushingYards"). See the class doc for the algorithm in
    * prose; {@code blendedMean} is the 65/35 recent/season split, {@code opponentAdjustment}
    * nudges it toward how the upcoming opponent's defense has performed. The 0.65/0.35 split is
    * arbitrary (weights recent form higher without letting a small 5-game sample dominate) and
    * not derived from any backtest.
    */
-  private PlayerPredictionResponse.PredictionSummaryResponse buildProjection(
+  PlayerPredictionResponse.PredictionSummaryResponse buildProjection(
       String metric,
       List<PlayerGameStat> recentStats,
       List<PlayerGameStat> allStats,
       String position,
       List<TeamDefenseGameStat> opponentDefenseHistory,
-      LeagueDefenseAverages leagueAverages) {
+      LeagueDefenseAverages leagueAverages,
+      GameConditions conditions) {
     List<Double> recentValues = metricValues(recentStats, metric);
     List<Double> allValues = metricValues(allStats, metric);
 
@@ -188,13 +254,16 @@ public class PlayerPredictionService {
     double seasonAverage = allValues.isEmpty() ? 0.0d : allValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
     double blendedMean = (0.65d * recentAverage) + (0.35d * seasonAverage);
     double opponentAdjustment = opponentAdjustment(metric, opponentDefenseHistory, leagueAverages);
-    double projectedMean = Math.max(0.0d, blendedMean + opponentAdjustment);
+    double conditionsAdjustment = gameConditionsAdjustment(metric, conditions);
+    double rushingQualityAdjustment = rushingQualityAdjustment(metric, recentStats);
+    double projectedMean =
+        Math.max(0.0d, blendedMean + opponentAdjustment + conditionsAdjustment + rushingQualityAdjustment);
 
     // Not surfaced in the UI today (see class doc) but kept for API consumers / future use.
     // stdDev uses the full season sample (not just the recent window) since 5 games is too few
     // to estimate variance from on its own. margin uses a z-score of 1.28, i.e. roughly an 80%
     // interval around projectedMean under a normal approximation - a simplification, since the
-    // interval doesn't account for the opponent adjustment's own uncertainty.
+    // interval doesn't account for the opponent/conditions adjustments' own uncertainty.
     double stdDev = standardDeviation(allValues);
     int sampleSize = Math.max(1, allValues.size());
     double margin = 1.28d * (stdDev / Math.sqrt(sampleSize));
@@ -208,10 +277,12 @@ public class PlayerPredictionService {
         upper,
         sampleSize,
         opponentAdjustment,
+        conditionsAdjustment,
+        rushingQualityAdjustment,
         notesForMetric(position, metric));
   }
 
-  private List<Double> metricValues(List<PlayerGameStat> stats, String metric) {
+  List<Double> metricValues(List<PlayerGameStat> stats, String metric) {
     List<Double> values = new ArrayList<>();
     for (PlayerGameStat stat : stats) {
       Integer value = switch (metric) {
@@ -244,7 +315,7 @@ public class PlayerPredictionService {
    * That's a deliberate, if arbitrary, choice to keep this a nudge rather than the dominant term;
    * not derived from a backtest.
    */
-  private double opponentAdjustment(
+  double opponentAdjustment(
       String metric, List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
     if (defenseHistory.isEmpty()) {
       return 0.0d;
@@ -281,6 +352,101 @@ public class PlayerPredictionService {
   }
 
   /**
+   * A specific game's own weather/scoring-environment context - the target game being backtested,
+   * or (live path) the player's upcoming game. {@code roof}/{@code windMph}/{@code gameTotalLine}
+   * being null just means "unknown," which {@link #gameConditionsAdjustment} treats as no effect,
+   * not an error - true for most of the live path today (see that method's doc for why).
+   */
+  record GameConditions(String roof, Double windMph, Double gameTotalLine) {
+    static final GameConditions UNKNOWN = new GameConditions(null, null, null);
+
+    boolean isOutdoors() {
+      return roof == null || "outdoors".equalsIgnoreCase(roof) || "open".equalsIgnoreCase(roof);
+    }
+  }
+
+  /**
+   * Nudges a projection based on this specific game's own conditions - wind (passing metrics only,
+   * and only when the game isn't in a dome/closed-roof stadium) and the Vegas game total (a proxy
+   * for expected overall scoring volume, vs. {@link #DEFAULT_GAME_TOTAL_LINE} when the real one
+   * isn't known). Same small-coefficient, additive style as {@link #opponentAdjustment} - picked to
+   * be directionally reasonable, not backtest-derived yet.
+   *
+   * <p>Backtesting uses real historical values from the target game's own stored {@code
+   * PlayerGameStat} row (nflverse-sourced, via {@code nfl_schedules}). The live path only reliably
+   * knows {@code roof} in advance (a static property of the host stadium, from {@code
+   * Team.venueIndoor}) plus a live {@code windMph} forecast (via {@link WeatherForecastClient},
+   * when the game is outdoors and within the forecastable window) - {@code gameTotalLine} isn't
+   * available live yet (no game-level Vegas odds source wired up - Priority 1's odds-api.io
+   * ingestion covers player props, not game lines), so live predictions get the wind/dome
+   * adjustment but not the scoring-environment one until that's closed.
+   */
+  double gameConditionsAdjustment(String metric, GameConditions conditions) {
+    double adjustment = 0.0d;
+
+    if (conditions.isOutdoors() && conditions.windMph() != null) {
+      double windAboveThreshold = Math.max(0.0d, conditions.windMph() - WIND_EFFECT_THRESHOLD_MPH);
+      adjustment += switch (metric) {
+        case "passingYards" -> -windAboveThreshold * 1.2d;
+        case "passingTouchdowns" -> -windAboveThreshold * 0.015d;
+        default -> 0.0d;
+      };
+    }
+
+    double totalLine = conditions.gameTotalLine() != null ? conditions.gameTotalLine() : DEFAULT_GAME_TOTAL_LINE;
+    double totalDelta = totalLine - DEFAULT_GAME_TOTAL_LINE;
+    adjustment += switch (metric) {
+      case "passingYards" -> totalDelta * 3.0d;
+      case "rushingYards" -> totalDelta * 1.0d;
+      case "receivingYards" -> totalDelta * 2.0d;
+      case "passingTouchdowns", "rushingTouchdowns", "touchdowns" -> totalDelta * 0.03d;
+      default -> 0.0d;
+    };
+
+    return adjustment;
+  }
+
+  /**
+   * Nudges {@code rushingYards} using PFR's advanced rushing charting ({@code
+   * PlayerGameStat.rushingYardsAfterContact}/{@code carries}): a player's own recent
+   * yards-after-contact-per-carry, compared against a league-average baseline, as a
+   * quality/reliability signal independent of the blend above. Before-contact + after-contact
+   * yards already roughly sum to the rushing yards the blend already projects - this isn't a
+   * second volume predictor, just a small tilt (see {@link #AFTER_CONTACT_QUALITY_COEFFICIENT})
+   * scaled by how many carries the player actually gets. Returns 0 for every other metric, and for
+   * players with no PFR advanced-rushing data yet (charting only goes back to 2018 and isn't
+   * published for every game).
+   */
+  double rushingQualityAdjustment(String metric, List<PlayerGameStat> recentStats) {
+    if (!"rushingYards".equals(metric)) {
+      return 0.0d;
+    }
+
+    int totalCarries = 0;
+    int totalAfterContactYards = 0;
+    int gamesWithData = 0;
+    for (PlayerGameStat stat : recentStats) {
+      Integer afterContactYards = stat.getRushingYardsAfterContact();
+      Integer carries = stat.getCarries();
+      if (afterContactYards != null && carries != null && carries > 0) {
+        totalAfterContactYards += afterContactYards;
+        totalCarries += carries;
+        gamesWithData++;
+      }
+    }
+
+    if (gamesWithData == 0 || totalCarries == 0) {
+      return 0.0d;
+    }
+
+    double playerRate = totalAfterContactYards / (double) totalCarries;
+    double averageCarriesPerGame = totalCarries / (double) gamesWithData;
+    return (playerRate - LEAGUE_AVERAGE_AFTER_CONTACT_YARDS_PER_CARRY)
+        * averageCarriesPerGame
+        * AFTER_CONTACT_QUALITY_COEFFICIENT;
+  }
+
+  /**
    * Per-game defensive averages across every stored team's {@code TeamDefenseGameStat} history -
    * the real baseline "opponentAdjustment" compares an upcoming opponent against, instead of a
    * hardcoded guess. Cached ({@link #LEAGUE_AVERAGES_TTL}) since it's identical for every player
@@ -295,18 +461,37 @@ public class PlayerPredictionService {
       return cached.averages();
     }
 
-    List<TeamDefenseGameStat> allDefenseGames =
-        teamDefenseGameStatRepository.findAllByGameDateAfter(
-            LocalDate.now(clock).minusDays(LEAGUE_AVERAGES_LOOKBACK.toDays()));
-    LeagueDefenseAverages averages =
-        new LeagueDefenseAverages(
-            averageOrDefault(allDefenseGames, TeamDefenseGameStat::getPassingYardsAllowed, 225.0d),
-            averageOrDefault(allDefenseGames, TeamDefenseGameStat::getRushingYardsAllowed, 110.0d),
-            averageOrDefault(allDefenseGames, TeamDefenseGameStat::getReceivingYardsAllowed, 125.0d),
-            averageOrDefault(allDefenseGames, TeamDefenseGameStat::getPointsAllowed, 21.0d));
-
+    LeagueDefenseAverages averages = leagueDefenseAverages(LocalDate.now(clock));
     cachedLeagueAverages = new CachedLeagueAverages(averages, clock.instant().plus(LEAGUE_AVERAGES_TTL));
     return averages;
+  }
+
+  /**
+   * Historical-date twin of the live, cached {@link #leagueDefenseAverages()} above - same
+   * averaging logic and fallbacks, but scoped to {@code [asOfDate - LEAGUE_AVERAGES_LOOKBACK,
+   * asOfDate]} instead of "now", and deliberately uncached since {@link PredictionBacktestService}
+   * calls this with many different dates (a single-entry cache would just thrash).
+   */
+  LeagueDefenseAverages leagueDefenseAverages(LocalDate asOfDate) {
+    List<TeamDefenseGameStat> allDefenseGames =
+        teamDefenseGameStatRepository.findAllByGameDateBetween(
+            asOfDate.minusDays(LEAGUE_AVERAGES_LOOKBACK.toDays()), asOfDate);
+    return leagueDefenseAveragesFrom(allDefenseGames);
+  }
+
+  /**
+   * Same averaging/fallback logic as {@link #leagueDefenseAverages(LocalDate)}, but over an
+   * already-fetched list instead of issuing its own query - lets {@link PredictionBacktestService}
+   * preload every {@code TeamDefenseGameStat} once and filter in memory per backtested game,
+   * instead of one DB round-trip per game (confirmed directly: the naive per-game-query version of
+   * this backtest took over two minutes against only 1,252 stored defense rows).
+   */
+  LeagueDefenseAverages leagueDefenseAveragesFrom(List<TeamDefenseGameStat> defenseGames) {
+    return new LeagueDefenseAverages(
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getPassingYardsAllowed, 225.0d),
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getRushingYardsAllowed, 110.0d),
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getReceivingYardsAllowed, 125.0d),
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getPointsAllowed, 21.0d));
   }
 
   private double averageOrDefault(
@@ -383,16 +568,16 @@ public class PlayerPredictionService {
 
   // Which stats we bother projecting per position - e.g. QBs don't get a receiving projection,
   // and non-QBs don't get a passing one. "default" covers FB/unusual/missing position values.
-  private List<String> metricsForPosition(String position) {
+  List<String> metricsForPosition(String position) {
     return switch (position) {
       case "QB" -> List.of("passingYards", "rushingYards", "passingTouchdowns", "turnovers");
       case "RB" -> List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
       case "WR", "TE", "FB" -> List.of("receivingYards", "receptions", "touchdowns");
-      default -> List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
+      case null, default -> List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
     };
   }
 
-  private String normalizePosition(String position) {
+  String normalizePosition(String position) {
     return position == null ? null : position.trim().toUpperCase();
   }
 
@@ -402,7 +587,7 @@ public class PlayerPredictionService {
     }
   }
 
-  private record LeagueDefenseAverages(
+  record LeagueDefenseAverages(
       double passingYardsAllowed,
       double rushingYardsAllowed,
       double receivingYardsAllowed,

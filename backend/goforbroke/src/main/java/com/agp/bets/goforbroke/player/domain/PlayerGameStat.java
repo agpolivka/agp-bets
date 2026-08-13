@@ -91,6 +91,35 @@ public class PlayerGameStat {
 
   private Integer drops;
 
+  // Weather/Vegas-line context for this specific game, sourced from nflverse's nfl_schedules
+  // (already ingested by import_schedules.R, just not previously joined through to this table).
+  // temp/wind are null for dome/closed-roof games by nflverse's own convention - no special-casing
+  // needed here, a null already means "no weather effect."
+  @Column(length = 32)
+  private String roof;
+
+  @Column(length = 64)
+  private String surface;
+
+  private Double tempFahrenheit;
+
+  private Double windMph;
+
+  // Positive = this player's own team was favored by that many points; negative = underdog.
+  private Double teamImpliedSpread;
+
+  private Double gameTotalLine;
+
+  // PFR advanced rushing (nflverse load_pfr_advstats), joined in separately from the box-score
+  // fetch via pfr_player_id -> load_players()$pfr_id -> espn_id. Null until
+  // import_pfr_advanced_rushing.R has run for this player/season/week - PFR's advanced charting
+  // only goes back to 2018 and isn't published for every game.
+  private Integer rushingYardsBeforeContact;
+
+  private Integer rushingYardsAfterContact;
+
+  private Integer rushingBrokenTackles;
+
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 

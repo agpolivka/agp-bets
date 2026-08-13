@@ -63,6 +63,15 @@ public class Team {
 
   private LocalDate upcomingGameDate;
 
+  // Full kickoff timestamp, alongside upcomingGameDate rather than replacing it (existing callers
+  // only need the date) - the weather forecast integration needs the actual time to pick the right
+  // forecast hour, not just "sometime that day."
+  private Instant upcomingGameTime;
+
+  // Whether THIS team hosts the upcoming game - weather has to look up the host stadium, which is
+  // the opponent's if this team is on the road.
+  private Boolean upcomingGameIsHome;
+
   private String venueId;
 
   private String venueName;

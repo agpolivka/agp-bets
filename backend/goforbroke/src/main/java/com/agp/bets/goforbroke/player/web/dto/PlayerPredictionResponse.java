@@ -18,5 +18,7 @@ public record PlayerPredictionResponse(
       double upperBound,
       int sampleSize,
       double opponentAdjustment,
+      double conditionsAdjustment,
+      double rushingQualityAdjustment,
       List<String> notes) {}
 }

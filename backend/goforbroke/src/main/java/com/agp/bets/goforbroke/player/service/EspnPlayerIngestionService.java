@@ -79,7 +79,7 @@ public class EspnPlayerIngestionService {
       return localCandidates;
     }
 
-    List<AthleteCandidate> espnCandidates = espnPlayerClient.findAthleteCandidatesByDisplayName(playerName, 10);
+    List<AthleteCandidate> espnCandidates = espnPlayerClient.searchAthletesByQuery(playerName, 10);
     if (espnCandidates.isEmpty()) {
       cacheCandidates(cacheKey, localCandidates);
       return localCandidates;
@@ -190,15 +190,20 @@ public class EspnPlayerIngestionService {
         || player.getTeamName().isBlank();
   }
 
+  // MIN_CANDIDATE_SCORE mirrors EspnAthleteMapper's threshold - now that this scores every stored
+  // player (not just SQL-LIKE substring pre-filtered ones), a floor keeps unrelated low-confidence
+  // names out of the result set.
+  private static final double MIN_LOCAL_CANDIDATE_SCORE = 0.35d;
+
   private List<AthleteCandidate> findLocalPlayerCandidates(String playerName) {
     if (playerName == null || playerName.isBlank()) {
       return List.of();
     }
 
-    String query = normalize(playerName);
-    return playerRepository.searchByNameFragment(query).stream()
-        .map(this::toLocalCandidate)
+    return playerRepository.findAllByOrderByDisplayNameAsc().stream()
+        .map(player -> toLocalCandidate(player, playerName))
         .filter(Objects::nonNull)
+        .filter(candidate -> candidate.score() >= MIN_LOCAL_CANDIDATE_SCORE)
         .sorted(
             java.util.Comparator.comparingDouble(AthleteCandidate::score)
                 .reversed()
@@ -209,12 +214,13 @@ public class EspnPlayerIngestionService {
         .toList();
   }
 
-  private AthleteCandidate toLocalCandidate(Player player) {
+  private AthleteCandidate toLocalCandidate(Player player, String query) {
     if (player == null || player.getEspnAthleteId() == null || player.getEspnAthleteId().isBlank()) {
       return null;
     }
 
-    double score = scoreLocalCandidate(player);
+    double score =
+        com.agp.bets.goforbroke.common.text.NameSimilarity.similarity(query, player.getDisplayName());
     return new AthleteCandidate(
         player.getEspnAthleteId(),
         player.getDisplayName(),
@@ -226,27 +232,6 @@ public class EspnPlayerIngestionService {
         player.getTeamId(),
         player.getActive(),
         score);
-  }
-
-  private double scoreLocalCandidate(Player player) {
-    String query = normalize(player.getDisplayName());
-    String displayName = normalize(player.getDisplayName());
-    String firstName = normalize(player.getFirstName());
-    String lastName = normalize(player.getLastName());
-
-    if (displayName.equals(query)) {
-      return 1.0d;
-    }
-
-    if ((firstName + " " + lastName).trim().equals(query)) {
-      return 0.98d;
-    }
-
-    if (displayName.contains(query)) {
-      return 0.92d;
-    }
-
-    return 0.75d;
   }
 
   private boolean hasStrongLocalMatch(List<AthleteCandidate> candidates) {

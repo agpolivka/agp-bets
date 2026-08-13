@@ -40,6 +40,31 @@ function getPlayerInitials(displayName) {
     .slice(0, 3);
 }
 
+const CONCERNING_AVAILABILITY_STATUSES = new Set([
+  "out",
+  "injured reserve",
+  "ir",
+  "physically unable to perform",
+  "pup",
+  "suspended",
+  "did not report",
+]);
+
+function resolveAvailability(injuryStatus) {
+  if (!injuryStatus || injuryStatus.trim().toLowerCase() === "active") {
+    return { tier: "active", label: "Active", blurb: null };
+  }
+
+  const normalized = injuryStatus.trim().toLowerCase();
+  const tier = CONCERNING_AVAILABILITY_STATUSES.has(normalized) ? "out" : "caution";
+  const blurb =
+    tier === "out"
+      ? `Listed as ${injuryStatus} - not expected to play this week.`
+      : `Listed as ${injuryStatus} - availability for this week isn't guaranteed.`;
+
+  return { tier, label: injuryStatus, blurb };
+}
+
 function formatNumber(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "-";
@@ -582,6 +607,7 @@ function PlayerDetailPage() {
   const headshotUrl = buildEspnHeadshotUrl(player?.espnAthleteId ?? athleteId);
   const isQuarterback = (player?.position ?? "").trim().toUpperCase() === "QB";
   const yardsPerGameLabel = isQuarterback ? "Passing and rushing yards per game" : "Yards per game";
+  const availability = resolveAvailability(player?.injuryStatus);
 
   useEffect(() => {
     let canceled = false;
@@ -760,8 +786,13 @@ function PlayerDetailPage() {
             <p className="lede">
               {player?.teamName ?? "Unknown team"} | {player?.position ?? "Unknown position"}
             </p>
-            {location.state?.candidate ? (
-              <p className="player-meta">Loaded from search and matched to this player profile.</p>
+            {player ? (
+              <div className="availability-row">
+                <span className={`availability-pill availability-${availability.tier}`}>
+                  {availability.label}
+                </span>
+                {availability.blurb ? <p className="player-meta">{availability.blurb}</p> : null}
+              </div>
             ) : null}
           </div>
 

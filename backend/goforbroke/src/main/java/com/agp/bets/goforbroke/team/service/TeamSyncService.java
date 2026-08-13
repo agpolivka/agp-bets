@@ -192,10 +192,14 @@ public class TeamSyncService {
       team.setUpcomingOpponentTeamId(null);
       team.setUpcomingOpponentName(null);
       team.setUpcomingGameDate(null);
+      team.setUpcomingGameTime(null);
+      team.setUpcomingGameIsHome(null);
     } else {
       team.setUpcomingOpponentTeamId(nextOpponent.opponentTeamId());
       team.setUpcomingOpponentName(nextOpponent.opponentName());
       team.setUpcomingGameDate(nextOpponent.gameDate());
+      team.setUpcomingGameTime(nextOpponent.gameTime());
+      team.setUpcomingGameIsHome(nextOpponent.isHomeGame());
     }
   }
 
@@ -219,10 +223,15 @@ public class TeamSyncService {
 
   private Optional<UpcomingOpponent> toUpcomingOpponent(
       String teamId, JsonNode event, LocalDate today) {
-    LocalDate gameDate = parseDate(event.path("date").asText(null));
+    String rawDate = event.path("date").asText(null);
+    LocalDate gameDate = parseDate(rawDate);
     if (gameDate == null || gameDate.isBefore(today)) {
       return Optional.empty();
     }
+    // ESPN's event date is a full kickoff timestamp (e.g. "2026-09-14T17:00Z"), not just a date -
+    // kept alongside gameDate (rather than replacing it) since existing callers only need the date;
+    // the weather forecast integration needs the actual kickoff time to pick the right forecast hour.
+    Instant gameTime = parseInstant(rawDate);
 
     JsonNode competition = event.path("competitions").path(0);
     boolean completed =
@@ -233,6 +242,9 @@ public class TeamSyncService {
     }
 
     JsonNode opponentCompetitor = findOpponentCompetitor(competition, teamId);
+    // The opponent's own homeAway flag tells us where the game itself is played - needed for
+    // weather (has to look up the *host* stadium, not necessarily this team's own).
+    Boolean isHomeGame = "away".equalsIgnoreCase(opponentCompetitor.path("homeAway").asText(null));
     String opponentTeamId = opponentCompetitor.path("team").path("id").asText(null);
     String opponentName = opponentCompetitor.path("team").path("displayName").asText(null);
     if (opponentName == null || opponentName.isBlank()) {
@@ -242,7 +254,19 @@ public class TeamSyncService {
       return Optional.empty();
     }
 
-    return Optional.of(new UpcomingOpponent(opponentTeamId, opponentName, gameDate));
+    return Optional.of(new UpcomingOpponent(opponentTeamId, opponentName, gameDate, gameTime, isHomeGame));
+  }
+
+  private Instant parseInstant(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+
+    try {
+      return OffsetDateTime.parse(value).toInstant();
+    } catch (RuntimeException exception) {
+      return null;
+    }
   }
 
   private LocalDate parseDate(String value) {

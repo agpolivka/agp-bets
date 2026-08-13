@@ -51,6 +51,12 @@ public class Player {
 
   private Boolean active;
 
+  // ESPN's own game-availability designation for this player (e.g. "Active", "Questionable",
+  // "Out", "Injured Reserve") - null means ESPN didn't report one (most players, most of the
+  // time). Distinct from `active` above, which is a roster-active flag, not a weekly
+  // availability status.
+  private String injuryStatus;
+
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 

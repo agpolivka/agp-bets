@@ -35,3 +35,17 @@ agp:
   stats-refresh:
     enabled: ${AGP_STATS_REFRESH_ENABLED:true}
     poll-interval-ms: ${AGP_STATS_REFRESH_POLL_INTERVAL_MS:14400000}
+  odds-api-io:
+    base-url: ${ODDS_API_IO_BASE_URL:https://api.odds-api.io/v3}
+    api-key: ${ODDS_API_IO_KEY:}
+  odds-backfill:
+    enabled: ${AGP_ODDS_BACKFILL_ENABLED:false}
+    league: ${AGP_ODDS_BACKFILL_LEAGUE:usa-nfl}
+    from: ${AGP_ODDS_BACKFILL_FROM:2025-12-14T00:00:00Z}
+    to: ${AGP_ODDS_BACKFILL_TO:2026-02-09T00:00:00Z}
+    bookmakers: ${AGP_ODDS_BACKFILL_BOOKMAKERS:Bet365}
+    request-delay-ms: ${AGP_ODDS_BACKFILL_DELAY_MS:1500}
+  player-catalog-refresh:
+    enabled: ${AGP_PLAYER_CATALOG_REFRESH_ENABLED:true}
+    poll-interval-ms: ${AGP_PLAYER_CATALOG_REFRESH_POLL_INTERVAL_MS:14400000}
+    stale-after-hours: ${AGP_PLAYER_CATALOG_REFRESH_STALE_AFTER_HOURS:24}

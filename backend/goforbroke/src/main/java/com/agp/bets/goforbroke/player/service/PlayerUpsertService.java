@@ -58,6 +58,7 @@ public class PlayerUpsertService {
     player.setTeamName(snapshot.teamName());
     player.setTeamId(snapshot.teamId());
     player.setActive(snapshot.active());
+    player.setInjuryStatus(snapshot.injuryStatus());
     player.setSourceUrl(snapshot.sourceUrl());
     player.setRawPayload(snapshot.rawPayload());
     player.setFetchedAt(snapshot.fetchedAt());

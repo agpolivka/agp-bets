@@ -1,16 +1,14 @@
 package com.agp.bets.goforbroke.player.service;
 
+import com.agp.bets.goforbroke.common.text.NameSimilarity;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Locale;
 import java.util.Optional;
-import java.util.Set;
 
 public final class EspnAthleteMapper {
 
@@ -75,6 +73,7 @@ public final class EspnAthleteMapper {
     String teamName = resolveTeamName(contextNode, profileNode);
     String teamId = resolveTeamId(contextNode, profileNode);
     Boolean active = contextNode.hasNonNull("active") ? contextNode.path("active").asBoolean() : null;
+    String injuryStatus = resolveInjuryStatus(profileNode);
 
     return new PlayerSnapshot(
         athleteId,
@@ -86,9 +85,17 @@ public final class EspnAthleteMapper {
         teamName,
         teamId,
         active,
+        injuryStatus,
         sourceUrl,
         athleteNode.toString(),
         fetchedAt);
+  }
+
+  // ESPN's per-athlete "status" object (e.g. {"name": "Active", "type": "active", ...}) -
+  // present on the full athlete-profile endpoint (fetchAthleteById), not the lighter search/
+  // candidate list endpoints, so this is only resolved in toSnapshot(), not toCandidate().
+  private static String resolveInjuryStatus(JsonNode profileNode) {
+    return text(profileNode.path("status"), "name");
   }
 
   public static AthleteCandidate toCandidate(JsonNode athleteNode, double score) {
@@ -141,14 +148,16 @@ public final class EspnAthleteMapper {
     String displayName =
         firstText(athleteNode, "displayName", "fullName", "shortName", "name").orElse(null);
 
-    double displayScore = scoreText(query, normalize(displayName));
-    double tokenSortScore = tokenSortScore(query, displayName);
-    double firstNameScore = scoreText(queryFirstToken(query), normalize(firstName));
-    double lastNameScore = scoreText(queryLastToken(query), normalize(lastName));
+    double displayScore = NameSimilarity.scoreText(query, NameSimilarity.normalize(displayName));
+    double tokenSortScore = NameSimilarity.tokenSortScore(query, displayName);
+    double firstNameScore =
+        NameSimilarity.scoreText(queryFirstToken(query), NameSimilarity.normalize(firstName));
+    double lastNameScore =
+        NameSimilarity.scoreText(queryLastToken(query), NameSimilarity.normalize(lastName));
     double namePairScore =
-        scoreText(
+        NameSimilarity.scoreText(
             query,
-            normalize(buildNamePair(firstName, lastName)));
+            NameSimilarity.normalize(buildNamePair(firstName, lastName)));
 
     double weightedScore =
         (0.40d * displayScore)
@@ -158,117 +167,6 @@ public final class EspnAthleteMapper {
             + (0.05d * namePairScore);
 
     return Math.max(weightedScore, Math.max(displayScore, tokenSortScore));
-  }
-
-  private static double scoreText(String query, String candidate) {
-    if (candidate == null || candidate.isBlank()) {
-      return 0.0d;
-    }
-
-    String normalizedQuery = compact(query);
-    String normalizedCandidate = compact(candidate);
-    if (normalizedQuery.isBlank() || normalizedCandidate.isBlank()) {
-      return 0.0d;
-    }
-
-    if (normalizedCandidate.equals(normalizedQuery)) {
-      return 1.0d;
-    }
-
-    if (candidate.contains(query) || query.contains(candidate)) {
-      return 0.96d;
-    }
-
-    double tokenScore = tokenOverlapScore(query, candidate);
-    double editScore = normalizedLevenshteinScore(normalizedQuery, normalizedCandidate);
-    return Math.max(tokenScore, editScore);
-  }
-
-  private static double tokenOverlapScore(String query, String candidate) {
-    String[] queryTokens = tokenize(query);
-    String[] candidateTokens = tokenize(candidate);
-    if (queryTokens.length == 0 || candidateTokens.length == 0) {
-      return 0.0d;
-    }
-
-    Set<String> candidateSet = new HashSet<>(List.of(candidateTokens));
-    int matches = 0;
-    for (String token : queryTokens) {
-      if (candidateSet.contains(token)) {
-        matches++;
-      }
-    }
-
-    return (double) matches / Math.max(queryTokens.length, candidateTokens.length);
-  }
-
-  private static double tokenSortScore(String query, String candidate) {
-    String sortedQuery = sortTokens(query);
-    String sortedCandidate = sortTokens(candidate);
-    if (sortedQuery.isBlank() || sortedCandidate.isBlank()) {
-      return 0.0d;
-    }
-    return scoreText(sortedQuery, sortedCandidate);
-  }
-
-  private static double normalizedLevenshteinScore(String left, String right) {
-    int maxLength = Math.max(left.length(), right.length());
-    if (maxLength == 0) {
-      return 0.0d;
-    }
-
-    int distance = levenshteinDistance(left, right);
-    return 1.0d - ((double) distance / maxLength);
-  }
-
-  private static int levenshteinDistance(String left, String right) {
-    int[] previous = new int[right.length() + 1];
-    int[] current = new int[right.length() + 1];
-
-    for (int j = 0; j <= right.length(); j++) {
-      previous[j] = j;
-    }
-
-    for (int i = 1; i <= left.length(); i++) {
-      current[0] = i;
-      for (int j = 1; j <= right.length(); j++) {
-        int cost = left.charAt(i - 1) == right.charAt(j - 1) ? 0 : 1;
-        current[j] =
-            Math.min(
-                Math.min(current[j - 1] + 1, previous[j] + 1),
-                previous[j - 1] + cost);
-      }
-
-      int[] swap = previous;
-      previous = current;
-      current = swap;
-    }
-
-    return previous[right.length()];
-  }
-
-  private static String[] tokenize(String value) {
-    String normalized = normalize(value);
-    if (normalized.isBlank()) {
-      return new String[0];
-    }
-
-    return normalized.split("\\s+");
-  }
-
-  private static String sortTokens(String value) {
-    String[] tokens = tokenize(value);
-    if (tokens.length == 0) {
-      return "";
-    }
-
-    List<String> sorted = new java.util.ArrayList<>(List.of(tokens));
-    sorted.sort(String::compareTo);
-    return String.join(" ", sorted);
-  }
-
-  private static String compact(String value) {
-    return value == null ? "" : value.replaceAll("\\s+", "");
   }
 
   private static String buildDisplayName(String firstName, String lastName, String fallback) {
@@ -482,12 +380,12 @@ public final class EspnAthleteMapper {
   }
 
   private static String queryFirstToken(String query) {
-    String[] tokens = tokenize(query);
+    String[] tokens = NameSimilarity.tokenize(query);
     return tokens.length == 0 ? null : tokens[0];
   }
 
   private static String queryLastToken(String query) {
-    String[] tokens = tokenize(query);
+    String[] tokens = NameSimilarity.tokenize(query);
     return tokens.length == 0 ? null : tokens[tokens.length - 1];
   }
 
@@ -513,11 +411,7 @@ public final class EspnAthleteMapper {
   }
 
   private static String normalize(String value) {
-    if (value == null) {
-      return "";
-    }
-
-    return value.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
+    return NameSimilarity.normalize(value);
   }
 
   @FunctionalInterface

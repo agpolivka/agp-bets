@@ -15,4 +15,8 @@ public interface TeamDefenseGameStatRepository extends JpaRepository<TeamDefense
   // Used for the league-wide baseline (PlayerPredictionService.leagueDefenseAverages) so old
   // seasons age out naturally instead of blending into "current" league averages forever.
   List<TeamDefenseGameStat> findAllByGameDateAfter(LocalDate cutoff);
+
+  // Historical-date twin of the above, used by PredictionBacktestService to compute league
+  // averages as of a past date instead of "now".
+  List<TeamDefenseGameStat> findAllByGameDateBetween(LocalDate start, LocalDate end);
 }

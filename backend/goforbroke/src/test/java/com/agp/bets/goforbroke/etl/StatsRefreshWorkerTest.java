@@ -24,6 +24,7 @@ class StatsRefreshWorkerTest {
 
     verify(rScriptRunner).run("refresh_stored_players_weekly.R");
     verify(rScriptRunner).run("import_team_defense.R");
+    verify(rScriptRunner).run("import_pfr_advanced_rushing.R");
   }
 
   @Test
