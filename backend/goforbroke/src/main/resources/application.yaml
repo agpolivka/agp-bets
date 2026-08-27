@@ -49,3 +49,6 @@ agp:
     enabled: ${AGP_PLAYER_CATALOG_REFRESH_ENABLED:true}
     poll-interval-ms: ${AGP_PLAYER_CATALOG_REFRESH_POLL_INTERVAL_MS:14400000}
     stale-after-hours: ${AGP_PLAYER_CATALOG_REFRESH_STALE_AFTER_HOURS:24}
+  injury-refresh:
+    enabled: ${AGP_INJURY_REFRESH_ENABLED:true}
+    poll-interval-ms: ${AGP_INJURY_REFRESH_POLL_INTERVAL_MS:21600000}

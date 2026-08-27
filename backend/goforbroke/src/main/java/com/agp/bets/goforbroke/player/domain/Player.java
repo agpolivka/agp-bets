@@ -57,6 +57,24 @@ public class Player {
   // availability status.
   private String injuryStatus;
 
+  // Weekly game-status designation (e.g. "Questionable", "Doubtful", "Out") from ESPN's
+  // league-wide injuries feed (see InjuryStatusRefreshWorker) - genuinely different from
+  // injuryStatus above. Confirmed directly (2026-08-17) that the two can diverge: a player showed
+  // "Active" via injuryStatus/athlete.status while this feed reported them "Out" for that week's
+  // game. Null means either healthy or simply absent from ESPN's current injuries report.
+  private String gameStatus;
+
+  // ESPN's own explanation for gameStatus above (its longComment, falling back to shortComment) -
+  // e.g. "questionable - hamstring". Null whenever gameStatus is null. TEXT, not the default
+  // varchar(255) - confirmed live (2026-08-20) that some longComment values exceed 255 chars and
+  // blew up every single save until this was widened.
+  @Column(columnDefinition = "TEXT")
+  private String gameStatusDetail;
+
+  // When ESPN itself last updated this specific status entry (not when this app polled for it).
+  // Null whenever gameStatus is null.
+  private Instant gameStatusUpdatedAt;
+
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 

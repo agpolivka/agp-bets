@@ -1,10 +1,13 @@
 #!/usr/bin/env Rscript
 #
 # One-off backfill: re-fetches every already-stored player's full season range so existing
-# player_game_stats rows pick up the new roof/surface/temp_fahrenheit/wind_mph/team_implied_spread/
-# game_total_line columns (added for the weather/Vegas heuristic terms). write_player_game_stats
-# does a delete-then-insert per player_id/season/week, so this is a safe upsert over rows that
-# already exist - not a duplicate-inserting job. Run once after the column migration; ongoing
+# player_game_stats rows pick up new columns added to write_player_game_stats() after those rows
+# were first written. Originally built for roof/surface/temp_fahrenheit/wind_mph/
+# team_implied_spread/game_total_line (weather/Vegas); also now carries target_share/
+# air_yards_share/wopr (added 2026-08-20) since both are the exact same "re-fetch and re-shape"
+# operation - nothing script-specific to either column set. write_player_game_stats does a
+# delete-then-insert per player_id/season/week, so this is a safe upsert over rows that already
+# exist - not a duplicate-inserting job. Run once after each such column migration; ongoing
 # freshness for the current season is already covered by refresh_stored_players_weekly.R, and new
 # players get full history via import_player_history.R on first search.
 

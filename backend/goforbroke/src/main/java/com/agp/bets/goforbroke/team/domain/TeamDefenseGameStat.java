@@ -73,6 +73,18 @@ public class TeamDefenseGameStat {
 
   private Integer sacks;
 
+  // PFR advanced defense (nflreadr::load_pfr_advstats(stat_type = "def")), aggregated up from
+  // per-defender rows to a team-game total/rate - that source is one row per individual defender,
+  // not team-level, so etl/r/import_pfr_defense_advanced.R sums the underlying counts before
+  // writing here rather than averaging each defender's own rate (which would over-weight
+  // low-snap-count players). Null until that script has run for this team/game - PFR's advanced
+  // charting only goes back to 2018.
+  private Integer pressures;
+
+  // Weighted rate: sum(missed tackles) / sum(missed tackles + combined tackles) across every
+  // defender in the game, not a naive average of each defender's own percentage.
+  private Double missedTacklePct;
+
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 

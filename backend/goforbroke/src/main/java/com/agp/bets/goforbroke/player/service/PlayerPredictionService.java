@@ -45,6 +45,12 @@ import org.springframework.transaction.annotation.Transactional;
  *       so it's blended rather than used on its own.
  *   <li>Add a linear adjustment based on how the player's upcoming opponent has performed on
  *       defense this season (see {@link #opponentAdjustment}).
+ *   <li>Add a role/opportunity adjustment for receivers based on recent target share (see {@link
+ *       #targetShareAdjustment}) and a workload adjustment for RB/WR/TE based on recent offensive
+ *       snap share against a real position-specific baseline (see {@link #usageAdjustment}).
+ *   <li>Scale the result by the player's weekly game-status participation likelihood (see {@link
+ *       #injuryStatusMultiplier}) - multiplicative, not additive, since availability affects
+ *       whether a player plays at all, not just how well.
  *   <li>Floor the result at zero - a projection can't be negative.
  * </ol>
  *
@@ -105,6 +111,68 @@ public class PlayerPredictionService {
   // is a quality tilt on top of the yardage the blend already projects, not a second independent
   // predictor of rushing volume.
   private static final double AFTER_CONTACT_QUALITY_COEFFICIENT = 0.35d;
+  // CPOE (completion_percentage_above_expectation) is already expressed relative to a league-wide
+  // expectation baseline by nflverse's own model - unlike the coefficients above, no separate
+  // baseline lookup or subtraction is needed here, just a scale from "percentage points" to yards/
+  // touchdowns. Small and hand-picked, same honesty caveat as every other coefficient in this file.
+  private static final double CPOE_PASSING_YARDS_COEFFICIENT = 3.0d;
+  private static final double CPOE_PASSING_TOUCHDOWNS_COEFFICIENT = 0.02d;
+  // Same shape as AFTER_CONTACT_QUALITY_COEFFICIENT - a quality tilt on receivingYards, not a
+  // second independent predictor of receiving volume.
+  private static final double RECEIVING_QUALITY_COEFFICIENT = 0.5d;
+  // More pressure allowed by a defense suppresses the opposing QB - negative on purpose, unlike
+  // the yardage-allowed coefficients above (which are positive because more yards/points allowed
+  // means an easier matchup). Small and hand-picked like every other coefficient here.
+  private static final double PRESSURE_PASSING_YARDS_COEFFICIENT = -2.0d;
+  private static final double PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT = -0.02d;
+  // missedTacklePct deltas are small fractions (e.g. 0.03 = 3 points worse than average), so this
+  // coefficient is scaled up accordingly rather than the ~0.08-0.10 used for whole-yard deltas
+  // above - a defense missing 3 more tackles per 100 than average allows roughly a few extra
+  // yards/game on this estimate, not a large swing.
+  private static final double MISSED_TACKLE_YARDS_COEFFICIENT = 100.0d;
+  // Rough, hand-picked participation-likelihood estimates for injuryStatusMultiplier - see that
+  // method's doc for why these are multiplicative rather than additive, and why they're not
+  // fit against how often a "Questionable"/"Doubtful" player actually ends up suiting up.
+  private static final double QUESTIONABLE_PARTICIPATION_MULTIPLIER = 0.85d;
+  private static final double DOUBTFUL_PARTICIPATION_MULTIPLIER = 0.25d;
+  // Real computed average (not a guessed ballpark like AFTER_CONTACT's) - avg wopr across every
+  // stored WR/TE/RB player-game in the 2025 season with target_share > 0 (4,451 rows), queried
+  // directly against this database on 2026-08-20 right after backfilling the column. Unlike
+  // leagueDefenseAverages, this isn't recomputed live/cached - a one-time real query, same
+  // treatment as the 8.5 pressures/9% missed-tackle Phase 4 fallbacks.
+  private static final double LEAGUE_AVERAGE_WOPR = 0.28d;
+  // Real-calibrated (2026-08-20, later), same regression method and multiply-by-the-fitted-
+  // coefficient direction as opponentAdjustment's doc: fit against every backtestable game using
+  // the original 40.0/3.0 values as the regression input, this term came back overscaled, same as
+  // opponentAdjustment/conditionsAdjustment were - only 11.4% of its magnitude for receivingYards
+  // (coefficient 0.1145, p=0.015, n=27,380) and 8.2% for receptions (coefficient 0.082, p=0.065,
+  // n=27,380) is actually supported by real data. (An earlier version of this comment/change
+  // mistakenly divided by the fitted coefficient instead of multiplying, concluding the opposite -
+  // "underscaled by ~9x" - and shipped a doubled coefficient; that was caught immediately because
+  // the live outcome backtest got measurably worse, not better, which is exactly the kind of thing
+  // verifying against real data after a change is supposed to catch.) Checked collinearity (WOPR is
+  // volume-correlated with blendedMean) via a variance inflation factor check regardless: VIF ~1.15
+  // for both metrics, well below the conventional ~5 concern threshold, so the finding itself isn't
+  // a correlation artifact - it's real, same as opponentAdjustment's.
+  private static final double WOPR_RECEIVING_YARDS_COEFFICIENT = 4.58d;
+  private static final double WOPR_RECEPTIONS_COEFFICIENT = 0.25d;
+  // Real position-specific averages (not a single flat guess) - queried directly against this
+  // database's own stored 2025-season offense_snap_pct data on 2026-08-20/22: RB 0.3551 (n=1,646),
+  // WR 0.5125 (n=2,627), TE 0.5167 (n=1,343). A workhorse RB and a rotational WR have very
+  // different "normal" snap shares, which is exactly why offenseSnapPct was left unwired at first
+  // (see its field doc on PlayerGameStat) until a real, position-aware baseline existed.
+  private static final Map<String, Double> LEAGUE_AVERAGE_SNAP_PCT_BY_POSITION =
+      Map.of("RB", 0.3551d, "WR", 0.5125d, "TE", 0.5167d);
+  // Real-calibrated (2026-08-20/22): fit rushingYards ~ recentRush + seasonRush + snapPctDelta for
+  // RBs (coefficient 37.5455, p<0.0001, n=1,493) and receivingYards ~ recentRecv + seasonRecv +
+  // snapPctDelta for WR/TE (coefficient 18.6292, p<0.0001, n=3,594) - both real, statistically
+  // robust, and independent of what recent/season yardage averages already capture (e.g. a RB
+  // coming off an injury has a small recent-yardage sample but a real snap-share increase already
+  // signals more volume is coming). Unlike targetShareAdjustment's calibration, these come from a
+  // regression against the RAW predictor directly (not a rescale of an already-scaled term), so
+  // they're used as-is here, not multiplied against a prior guess.
+  private static final double SNAP_PCT_RUSHING_YARDS_COEFFICIENT = 37.5455d;
+  private static final double SNAP_PCT_RECEIVING_YARDS_COEFFICIENT = 18.6292d;
 
   private final PlayerRepository playerRepository;
   private final PlayerGameStatRepository playerGameStatRepository;
@@ -176,7 +244,14 @@ public class PlayerPredictionService {
             .map(
                 metric ->
                     buildProjection(
-                        metric, recentStats, stats, position, opponentDefenseHistory, leagueAverages, conditions))
+                        metric,
+                        recentStats,
+                        stats,
+                        position,
+                        opponentDefenseHistory,
+                        leagueAverages,
+                        conditions,
+                        player.getGameStatus()))
             .toList();
 
     PlayerPredictionResponse response =
@@ -186,7 +261,9 @@ public class PlayerPredictionService {
         player.getPosition(),
         projections,
         confidenceScore(stats, recentStats),
-        clock.instant());
+        clock.instant(),
+        player.getGameStatus(),
+        player.getGameStatusDetail());
 
     Duration ttl = stats.size() < THIN_SAMPLE_GAME_THRESHOLD ? THIN_SAMPLE_CACHE_TTL : CACHE_TTL;
     predictionCache.put(athleteId, new CachedPrediction(response, clock.instant().plus(ttl)));
@@ -238,6 +315,9 @@ public class PlayerPredictionService {
    * nudges it toward how the upcoming opponent's defense has performed. The 0.65/0.35 split is
    * arbitrary (weights recent form higher without letting a small 5-game sample dominate) and
    * not derived from any backtest.
+   *
+   * <p>{@code gameStatus} (see {@link #injuryStatusMultiplier}) is applied last, as a scale on the
+   * whole summed projection rather than another additive term - see that method's doc for why.
    */
   PlayerPredictionResponse.PredictionSummaryResponse buildProjection(
       String metric,
@@ -246,7 +326,8 @@ public class PlayerPredictionService {
       String position,
       List<TeamDefenseGameStat> opponentDefenseHistory,
       LeagueDefenseAverages leagueAverages,
-      GameConditions conditions) {
+      GameConditions conditions,
+      String gameStatus) {
     List<Double> recentValues = metricValues(recentStats, metric);
     List<Double> allValues = metricValues(allStats, metric);
 
@@ -256,17 +337,37 @@ public class PlayerPredictionService {
     double opponentAdjustment = opponentAdjustment(metric, opponentDefenseHistory, leagueAverages);
     double conditionsAdjustment = gameConditionsAdjustment(metric, conditions);
     double rushingQualityAdjustment = rushingQualityAdjustment(metric, recentStats);
+    double advancedMetricAdjustment = advancedMetricAdjustment(metric, recentStats);
+    double targetShareAdjustment = targetShareAdjustment(metric, recentStats);
+    // usageAdjustment (offenseSnapPct-based) is deliberately NOT summed in here - see its own doc
+    // for why: real standalone significance, but live A/B testing on the full formula (not just
+    // recentAverage+seasonAverage in isolation) showed no net improvement, in fact very slightly
+    // worse (rushingYards MAE +0.0095, receivingYards MAE +0.022) - see WORKPLAN.md. Still computed
+    // and surfaced on the response (not included in projectedMean) for transparency, same treatment
+    // as this file's other stored-but-unwired signals.
+    double usageAdjustment = usageAdjustment(metric, position, recentStats);
+    double injuryStatusMultiplier = injuryStatusMultiplier(gameStatus);
     double projectedMean =
-        Math.max(0.0d, blendedMean + opponentAdjustment + conditionsAdjustment + rushingQualityAdjustment);
+        Math.max(
+            0.0d,
+            (blendedMean
+                    + opponentAdjustment
+                    + conditionsAdjustment
+                    + rushingQualityAdjustment
+                    + advancedMetricAdjustment
+                    + targetShareAdjustment)
+                * injuryStatusMultiplier);
 
     // Not surfaced in the UI today (see class doc) but kept for API consumers / future use.
     // stdDev uses the full season sample (not just the recent window) since 5 games is too few
     // to estimate variance from on its own. margin uses a z-score of 1.28, i.e. roughly an 80%
     // interval around projectedMean under a normal approximation - a simplification, since the
-    // interval doesn't account for the opponent/conditions adjustments' own uncertainty.
+    // interval doesn't account for the opponent/conditions adjustments' own uncertainty. Also
+    // scaled by injuryStatusMultiplier so a likely-out player's interval shrinks toward zero along
+    // with the mean, instead of implying they might play after all.
     double stdDev = standardDeviation(allValues);
     int sampleSize = Math.max(1, allValues.size());
-    double margin = 1.28d * (stdDev / Math.sqrt(sampleSize));
+    double margin = 1.28d * (stdDev / Math.sqrt(sampleSize)) * injuryStatusMultiplier;
     double lower = Math.max(0.0d, projectedMean - margin);
     double upper = projectedMean + margin;
 
@@ -279,6 +380,9 @@ public class PlayerPredictionService {
         opponentAdjustment,
         conditionsAdjustment,
         rushingQualityAdjustment,
+        advancedMetricAdjustment,
+        targetShareAdjustment,
+        usageAdjustment,
         notesForMetric(position, metric));
   }
 
@@ -307,13 +411,23 @@ public class PlayerPredictionService {
    * Nudges a projection based on the upcoming opponent's defensive history this season. For each
    * metric: average what the opponent has allowed per game, compare it to the real league-average
    * baseline computed from every stored team's defensive history (see {@link
-   * #leagueDefenseAverages}), and scale the difference by a small coefficient.
+   * #leagueDefenseAverages}), and scale the difference by a small coefficient. Also folds in
+   * {@link #advancedDefenseAdjustment} (PFR advanced defense, Phase 4) - conceptually the same
+   * "how good/bad is this opponent's defense" signal as the rest of this method, just sourced from
+   * richer per-defender data aggregated to team-game level, so it lives here rather than as a
+   * separate top-level adjustment field.
    *
-   * <p>The coefficients (0.08-0.10 for yardage, 0.02-0.03 for receptions/touchdowns) are small on
-   * purpose so a single below-average defense doesn't swing the projection wildly - e.g. a
-   * defense allowing 25 yards/game more than league average only shifts a projection by ~2 yards.
-   * That's a deliberate, if arbitrary, choice to keep this a nudge rather than the dominant term;
-   * not derived from a backtest.
+   * <p><b>Real-calibrated (2026-08-20)</b>, not hand-picked like most of this file's other
+   * coefficients: fit {@code actual ~ recentAverage + seasonAverage + opponentAdjustment + ...}
+   * per metric in R against every backtestable historical game (see {@code
+   * PredictionBacktestService#runCalibrationExport}), using the CURRENT hand-picked coefficients
+   * to compute opponentAdjustment as a regression input, then read off how much of that
+   * already-applied adjustment the real data actually supports. Every metric came back
+   * overscaled, consistently and often dramatically: rushingYards needed only 44% of its current
+   * magnitude (p&lt;0.0001, n=12,274), receivingYards 18% (p=0.0048, n=27,380), receptions 7%
+   * (p=0.003, n=27,380), touchdowns 16% (p&lt;0.0001, n=27,380); passingYards's evidence was
+   * weaker (69%, p=0.051, n=4,959) but still pointed the same direction, not the opposite one.
+   * Values below are the old hand-picked ones scaled by those real multipliers, not re-guessed.
    */
   double opponentAdjustment(
       String metric, List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
@@ -336,19 +450,65 @@ public class PlayerPredictionService {
             .filter(java.util.Objects::nonNull)
             .toList();
 
-    if (values.isEmpty()) {
-      return 0.0d;
+    double baseAdjustment = 0.0d;
+    if (!values.isEmpty()) {
+      double opponentAverage = values.stream().mapToDouble(Integer::doubleValue).average().orElse(0.0d);
+      baseAdjustment = switch (metric) {
+        case "passingYards" -> (opponentAverage - leagueAverages.passingYardsAllowed()) * 0.07d;
+        case "rushingYards" -> (opponentAverage - leagueAverages.rushingYardsAllowed()) * 0.035d;
+        case "receivingYards" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.015d;
+        case "receptions" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.0015d;
+        case "touchdowns" -> (opponentAverage - leagueAverages.pointsAllowed()) * 0.005d;
+        default -> 0.0d;
+      };
     }
 
-    double opponentAverage = values.stream().mapToDouble(Integer::doubleValue).average().orElse(0.0d);
+    return baseAdjustment + advancedDefenseAdjustment(metric, defenseHistory, leagueAverages);
+  }
+
+  /**
+   * Phase 4: nudges {@code passingYards}/{@code passingTouchdowns} using the opponent's recent
+   * pass-rush pressure (PFR advanced defense, summed per game across every defender - see {@code
+   * TeamDefenseGameStat.pressures}'s doc for why a sum, not an average of per-defender rates) and
+   * {@code rushingYards}/{@code receivingYards} using their recent missed-tackle rate. Same
+   * real-baseline-vs-opponent-average shape as the rest of {@link #opponentAdjustment}, just a
+   * second, independent pair of signals not derivable from the basic yards/points-allowed numbers
+   * already used there. Returns 0 for every other metric, and for opponents with no PFR advanced
+   * defense data yet (charting only goes back to 2018).
+   */
+  private double advancedDefenseAdjustment(
+      String metric, List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
     return switch (metric) {
-      case "passingYards" -> (opponentAverage - leagueAverages.passingYardsAllowed()) * 0.10d;
-      case "rushingYards" -> (opponentAverage - leagueAverages.rushingYardsAllowed()) * 0.08d;
-      case "receivingYards" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.08d;
-      case "receptions" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.02d;
-      case "touchdowns" -> (opponentAverage - leagueAverages.pointsAllowed()) * 0.03d;
+      case "passingYards" -> pressureDelta(defenseHistory, leagueAverages) * PRESSURE_PASSING_YARDS_COEFFICIENT;
+      case "passingTouchdowns" ->
+          pressureDelta(defenseHistory, leagueAverages) * PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT;
+      case "rushingYards", "receivingYards" ->
+          missedTackleDelta(defenseHistory, leagueAverages) * MISSED_TACKLE_YARDS_COEFFICIENT;
       default -> 0.0d;
     };
+  }
+
+  private double pressureDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
+    List<Integer> pressures =
+        defenseHistory.stream().map(TeamDefenseGameStat::getPressures).filter(java.util.Objects::nonNull).toList();
+    if (pressures.isEmpty()) {
+      return 0.0d;
+    }
+    double average = pressures.stream().mapToDouble(Integer::doubleValue).average().orElse(0.0d);
+    return average - leagueAverages.pressuresPerGame();
+  }
+
+  private double missedTackleDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
+    List<Double> rates =
+        defenseHistory.stream()
+            .map(TeamDefenseGameStat::getMissedTacklePct)
+            .filter(java.util.Objects::nonNull)
+            .toList();
+    if (rates.isEmpty()) {
+      return 0.0d;
+    }
+    double average = rates.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
+    return average - leagueAverages.missedTacklePct();
   }
 
   /**
@@ -369,8 +529,19 @@ public class PlayerPredictionService {
    * Nudges a projection based on this specific game's own conditions - wind (passing metrics only,
    * and only when the game isn't in a dome/closed-roof stadium) and the Vegas game total (a proxy
    * for expected overall scoring volume, vs. {@link #DEFAULT_GAME_TOTAL_LINE} when the real one
-   * isn't known). Same small-coefficient, additive style as {@link #opponentAdjustment} - picked to
-   * be directionally reasonable, not backtest-derived yet.
+   * isn't known).
+   *
+   * <p><b>Partially real-calibrated (2026-08-20)</b>, same method/evidence as {@link
+   * #opponentAdjustment}'s doc: fit {@code actual ~ ... + conditionsAdjustment} per metric using
+   * the current hand-picked coefficients as the regression input. passingYards's combined wind+
+   * total-line effect needed only 51% of its current magnitude (p&lt;0.0001, n=4,959) - the
+   * passing-specific coefficients below (wind and both passing cases) are scaled by that factor.
+   * receivingYards needed only 12% (p&lt;0.0001, n=27,380) - its total-line coefficient is scaled
+   * accordingly. rushingYards showed literally no measurable effect (p=0.93, n=12,274) - its
+   * total-line coefficient is cut to a small residual rather than removed outright, since "no
+   * measurable effect in this sample" isn't the same as "definitely zero." The touchdown-metrics
+   * case (shared across passingTouchdowns/rushingTouchdowns/touchdowns) wasn't isolated by this
+   * regression pass and is left as the original hand-picked guess.
    *
    * <p>Backtesting uses real historical values from the target game's own stored {@code
    * PlayerGameStat} row (nflverse-sourced, via {@code nfl_schedules}). The live path only reliably
@@ -387,8 +558,8 @@ public class PlayerPredictionService {
     if (conditions.isOutdoors() && conditions.windMph() != null) {
       double windAboveThreshold = Math.max(0.0d, conditions.windMph() - WIND_EFFECT_THRESHOLD_MPH);
       adjustment += switch (metric) {
-        case "passingYards" -> -windAboveThreshold * 1.2d;
-        case "passingTouchdowns" -> -windAboveThreshold * 0.015d;
+        case "passingYards" -> -windAboveThreshold * 0.6d;
+        case "passingTouchdowns" -> -windAboveThreshold * 0.008d;
         default -> 0.0d;
       };
     }
@@ -396,9 +567,9 @@ public class PlayerPredictionService {
     double totalLine = conditions.gameTotalLine() != null ? conditions.gameTotalLine() : DEFAULT_GAME_TOTAL_LINE;
     double totalDelta = totalLine - DEFAULT_GAME_TOTAL_LINE;
     adjustment += switch (metric) {
-      case "passingYards" -> totalDelta * 3.0d;
-      case "rushingYards" -> totalDelta * 1.0d;
-      case "receivingYards" -> totalDelta * 2.0d;
+      case "passingYards" -> totalDelta * 1.5d;
+      case "rushingYards" -> totalDelta * 0.1d;
+      case "receivingYards" -> totalDelta * 0.24d;
       case "passingTouchdowns", "rushingTouchdowns", "touchdowns" -> totalDelta * 0.03d;
       default -> 0.0d;
     };
@@ -447,6 +618,182 @@ public class PlayerPredictionService {
   }
 
   /**
+   * Nudges {@code passingYards}/{@code passingTouchdowns}/{@code receivingYards} using nflverse
+   * Next Gen Stats ({@code PlayerGameStat.passingCpoe}/{@code receivingYacAboveExpectation}) - a
+   * player's own recent performance relative to NGS's own expectation model, not a second,
+   * independently-derived baseline the way {@link #opponentAdjustment} needs one. Deliberately
+   * does NOT touch {@code rushingYards}: NGS also publishes a rushing-yards-over-expected metric,
+   * but wiring it in here would stack a second, independent rushing-quality signal on top of
+   * {@link #rushingQualityAdjustment} (PFR after-contact yards) without any evidence the two are
+   * additive rather than redundant - see {@code PlayerGameStat.rushingYardsOverExpectedPerAtt}'s
+   * doc. Returns 0 for every other metric, and for players with no NGS data yet (charting only
+   * goes back to 2016 and only exists for tracked skill positions).
+   */
+  double advancedMetricAdjustment(String metric, List<PlayerGameStat> recentStats) {
+    return switch (metric) {
+      case "passingYards" -> passingAccuracyNudge(recentStats) * CPOE_PASSING_YARDS_COEFFICIENT;
+      case "passingTouchdowns" -> passingAccuracyNudge(recentStats) * CPOE_PASSING_TOUCHDOWNS_COEFFICIENT;
+      case "receivingYards" -> receivingQualityNudge(recentStats);
+      default -> 0.0d;
+    };
+  }
+
+  private double passingAccuracyNudge(List<PlayerGameStat> recentStats) {
+    List<Double> cpoeValues =
+        recentStats.stream()
+            .map(PlayerGameStat::getPassingCpoe)
+            .filter(java.util.Objects::nonNull)
+            .toList();
+    return cpoeValues.isEmpty()
+        ? 0.0d
+        : cpoeValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
+  }
+
+  private double receivingQualityNudge(List<PlayerGameStat> recentStats) {
+    double receptionsWeightedYacTotal = 0.0d;
+    int totalReceptions = 0;
+    int gamesWithData = 0;
+    for (PlayerGameStat stat : recentStats) {
+      Double yacAboveExpectationPerCatch = stat.getReceivingYacAboveExpectation();
+      Integer receptions = stat.getReceptions();
+      if (yacAboveExpectationPerCatch != null && receptions != null && receptions > 0) {
+        receptionsWeightedYacTotal += yacAboveExpectationPerCatch * receptions;
+        totalReceptions += receptions;
+        gamesWithData++;
+      }
+    }
+
+    if (gamesWithData == 0 || totalReceptions == 0) {
+      return 0.0d;
+    }
+
+    double playerRate = receptionsWeightedYacTotal / totalReceptions;
+    double averageReceptionsPerGame = totalReceptions / (double) gamesWithData;
+    return playerRate * averageReceptionsPerGame * RECEIVING_QUALITY_COEFFICIENT;
+  }
+
+  /**
+   * Nudges {@code receivingYards}/{@code receptions} using the player's own recent average {@code
+   * PlayerGameStat.wopr} (Weighted Opportunity Rating - nflverse's own composite of target share
+   * and air yards share, roughly {@code 1.5*target_share + 0.7*air_yards_share}) against {@link
+   * #LEAGUE_AVERAGE_WOPR}, a real average computed from this database's own stored 2025 data (see
+   * that constant's doc), not a guessed ballpark. A genuine opportunity/role signal - correlated
+   * with, but not fully redundant with, the recent-yardage average {@code blendedMean} already
+   * captures: WOPR reflects how big a role the offense is giving a player independent of whether
+   * recent games happened to convert those opportunities into yards (a bad QB day or tough
+   * matchup can suppress yards without shrinking role). Deliberately stores {@code target_share}/
+   * {@code air_yards_share} separately too but doesn't wire them in on top of this - they'd be
+   * double-counting the same signal WOPR already composites, same "don't stack redundant nudges"
+   * reasoning as {@link #advancedMetricAdjustment}'s doc. Returns 0 for every other metric, and
+   * for players with no recent target-share data (e.g. before the 2026-08-20 backfill, or a
+   * position that doesn't get targeted).
+   */
+  double targetShareAdjustment(String metric, List<PlayerGameStat> recentStats) {
+    if (!"receivingYards".equals(metric) && !"receptions".equals(metric)) {
+      return 0.0d;
+    }
+
+    List<Double> woprValues =
+        recentStats.stream().map(PlayerGameStat::getWopr).filter(java.util.Objects::nonNull).toList();
+    if (woprValues.isEmpty()) {
+      return 0.0d;
+    }
+
+    double recentAverageWopr = woprValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
+    double delta = recentAverageWopr - LEAGUE_AVERAGE_WOPR;
+    return switch (metric) {
+      case "receivingYards" -> delta * WOPR_RECEIVING_YARDS_COEFFICIENT;
+      case "receptions" -> delta * WOPR_RECEPTIONS_COEFFICIENT;
+      default -> 0.0d;
+    };
+  }
+
+  /**
+   * Nudges {@code rushingYards} (RB) / {@code receivingYards} (WR, TE) using the player's own
+   * recent offensive snap share ({@code PlayerGameStat.offenseSnapPct}, from {@code
+   * import_snap_counts.R}) against a real, position-specific baseline (see {@link
+   * #LEAGUE_AVERAGE_SNAP_PCT_BY_POSITION}). Unlike {@link #targetShareAdjustment} (a receiving-role
+   * signal via WOPR), snap share is a genuine opportunity/workload signal confirmed to predict
+   * volume independent of what recent/season yardage averages already capture - see {@link
+   * #SNAP_PCT_RUSHING_YARDS_COEFFICIENT}'s doc for the real regression this coefficient comes from.
+   * A position-aware baseline is required here in a way WOPR didn't need one: a workhorse RB and a
+   * rotational WR have very different "normal" snap shares, so a single flat league-average would
+   * risk being actively wrong, not just imprecise - exactly why this field was left unwired until a
+   * real per-position baseline existed. Returns 0 for every other metric/position, and for players
+   * with no snap-count data yet.
+   */
+  double usageAdjustment(String metric, String position, List<PlayerGameStat> recentStats) {
+    // Map.of(...).get(null) throws NPE rather than returning null (confirmed live 2026-08-20/22 -
+    // players with an unknown/blank position, already a real handled case elsewhere in this file,
+    // reach here with position == null) - guard explicitly instead of relying on containsKey/get.
+    if (position == null) {
+      return 0.0d;
+    }
+
+    Double baseline = LEAGUE_AVERAGE_SNAP_PCT_BY_POSITION.get(position);
+    if (baseline == null) {
+      return 0.0d;
+    }
+
+    List<Double> snapPctValues =
+        recentStats.stream().map(PlayerGameStat::getOffenseSnapPct).filter(java.util.Objects::nonNull).toList();
+    if (snapPctValues.isEmpty()) {
+      return 0.0d;
+    }
+
+    double recentAverageSnapPct = snapPctValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
+    double delta = recentAverageSnapPct - baseline;
+
+    return switch (position) {
+      case "RB" -> "rushingYards".equals(metric) ? delta * SNAP_PCT_RUSHING_YARDS_COEFFICIENT : 0.0d;
+      case "WR", "TE" -> "receivingYards".equals(metric) ? delta * SNAP_PCT_RECEIVING_YARDS_COEFFICIENT : 0.0d;
+      default -> 0.0d;
+    };
+  }
+
+  /**
+   * Weekly-status participation likelihood (see {@code Player.gameStatus}, sourced by {@code
+   * InjuryStatusRefreshWorker} from ESPN's league-wide injuries feed - distinct from the
+   * roster-level {@code Player.injuryStatus}). Applied as a multiplicative scale on the whole
+   * projected value in {@link #buildProjection}, unlike every other adjustment in this file: those
+   * nudge how well a player is expected to perform in a game they're still expected to play, while
+   * a weekly status changes whether they play at all - an additive nudge can't represent "probably
+   * won't suit up" the way a multiplier close to zero can.
+   *
+   * <p>These are rough, hand-picked participation-rate estimates (not fit against how often a
+   * "Questionable"/"Doubtful" player actually ends up playing), same honesty caveat as every other
+   * constant in this file. "Out"/"Injured Reserve"/"PUP"/"Suspended"/"Did Not Report" all floor to
+   * 0 - meaningfully different from the small nudges above, since these genuinely mean "not
+   * playing," not "playing but expected to do a bit worse." An unrecognized status string is
+   * treated as a no-op (1.0) rather than guessed at.
+   *
+   * <p>Deliberately not applied in {@code PredictionBacktestService}: nothing in this database
+   * records what a player's weekly status <em>was</em> for a historical game, only the
+   * live-fetched current designation exists - so unlike {@link #gameConditionsAdjustment} (which
+   * has a real historical counterpart via stored {@code PlayerGameStat} columns), this is a
+   * live-path-only signal with no backtestable half at all.
+   */
+  static double injuryStatusMultiplier(String gameStatus) {
+    if (gameStatus == null || gameStatus.isBlank()) {
+      return 1.0d;
+    }
+
+    return switch (gameStatus.trim().toLowerCase(java.util.Locale.ROOT)) {
+      case "questionable" -> QUESTIONABLE_PARTICIPATION_MULTIPLIER;
+      case "doubtful" -> DOUBTFUL_PARTICIPATION_MULTIPLIER;
+      case "out",
+          "injured reserve",
+          "ir",
+          "physically unable to perform",
+          "pup",
+          "suspended",
+          "did not report" ->
+          0.0d;
+      default -> 1.0d;
+    };
+  }
+
+  /**
    * Per-game defensive averages across every stored team's {@code TeamDefenseGameStat} history -
    * the real baseline "opponentAdjustment" compares an upcoming opponent against, instead of a
    * hardcoded guess. Cached ({@link #LEAGUE_AVERAGES_TTL}) since it's identical for every player
@@ -491,7 +838,13 @@ public class PlayerPredictionService {
         averageOrDefault(defenseGames, TeamDefenseGameStat::getPassingYardsAllowed, 225.0d),
         averageOrDefault(defenseGames, TeamDefenseGameStat::getRushingYardsAllowed, 110.0d),
         averageOrDefault(defenseGames, TeamDefenseGameStat::getReceivingYardsAllowed, 125.0d),
-        averageOrDefault(defenseGames, TeamDefenseGameStat::getPointsAllowed, 21.0d));
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getPointsAllowed, 21.0d),
+        // 8.5 pressures/game and a 9% missed-tackle rate are real computed averages from this
+        // session's live PFR pull (2023-2025, ~7,900 rows) - see WORKPLAN.md's Phase 4 entry -
+        // used as the fallback the same way 225/110/125/21 above are, not derived from this
+        // database's own stored data like the primary averageOrDefault path is.
+        averageOrDefault(defenseGames, TeamDefenseGameStat::getPressures, 8.5d),
+        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getMissedTacklePct, 0.09d));
   }
 
   private double averageOrDefault(
@@ -502,6 +855,16 @@ public class PlayerPredictionService {
     return values.isEmpty()
         ? defaultValue
         : values.stream().mapToDouble(Integer::doubleValue).average().orElse(defaultValue);
+  }
+
+  private double averageOrDefaultDouble(
+      List<TeamDefenseGameStat> defenseGames,
+      java.util.function.Function<TeamDefenseGameStat, Double> accessor,
+      double defaultValue) {
+    List<Double> values = defenseGames.stream().map(accessor).filter(java.util.Objects::nonNull).toList();
+    return values.isEmpty()
+        ? defaultValue
+        : values.stream().mapToDouble(Double::doubleValue).average().orElse(defaultValue);
   }
 
   /**
@@ -566,14 +929,32 @@ public class PlayerPredictionService {
     return Math.round(value * 100.0d) / 100.0d;
   }
 
+  // Positions that actually post the offensive skill-position stats this service projects.
+  // Package-private (not private): PredictionBacktestService's outcome backtest relies on
+  // metricsForPosition returning an empty list for real non-skill positions (see below) to avoid
+  // diluting its aggregate MAE with structurally-near-zero comparisons for kickers/linemen/etc.
+  private static final java.util.Set<String> SKILL_POSITIONS = java.util.Set.of("QB", "RB", "WR", "TE", "FB");
+
   // Which stats we bother projecting per position - e.g. QBs don't get a receiving projection,
-  // and non-QBs don't get a passing one. "default" covers FB/unusual/missing position values.
+  // and non-QBs don't get a passing one. A position that's null/blank (genuinely unknown - could
+  // still be a skill player with unsynced data) falls back to a reasonable default rather than
+  // projecting nothing. A non-blank position that isn't in SKILL_POSITIONS (OL/DL/LB/DB/K/P/LS/
+  // etc.) is a real, known non-skill position - these players never meaningfully post
+  // rushing/receiving/passing stats, so they get no projections at all rather than a manufactured
+  // fallback (this used to hand every non-skill player the RB metric list, which is what diluted
+  // the outcome-MAE backtest once its player set expanded past a handful of skill players - see
+  // WORKPLAN.md).
   List<String> metricsForPosition(String position) {
+    if (position == null || position.isBlank()) {
+      return List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
+    }
+    if (!SKILL_POSITIONS.contains(position)) {
+      return List.of();
+    }
     return switch (position) {
       case "QB" -> List.of("passingYards", "rushingYards", "passingTouchdowns", "turnovers");
       case "RB" -> List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
-      case "WR", "TE", "FB" -> List.of("receivingYards", "receptions", "touchdowns");
-      case null, default -> List.of("rushingYards", "receivingYards", "receptions", "touchdowns");
+      default -> List.of("receivingYards", "receptions", "touchdowns"); // WR, TE, FB
     };
   }
 
@@ -591,7 +972,9 @@ public class PlayerPredictionService {
       double passingYardsAllowed,
       double rushingYardsAllowed,
       double receivingYardsAllowed,
-      double pointsAllowed) {}
+      double pointsAllowed,
+      double pressuresPerGame,
+      double missedTacklePct) {}
 
   private record CachedLeagueAverages(LeagueDefenseAverages averages, Instant expiresAt) {
     private boolean isExpired(Instant now) {

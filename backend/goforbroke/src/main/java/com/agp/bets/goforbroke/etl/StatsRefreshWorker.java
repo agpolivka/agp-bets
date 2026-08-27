@@ -8,19 +8,34 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 /**
- * Runs the stored-players stats refresh, the team defense refresh, and the PFR advanced rushing
- * enrichment when {@link StatsRefreshDueChecker} says it's due - all three change on the same
- * signal (a game completed), so they share one due-check instead of each needing their own. None
- * of the three scripts take a season argument here; all default to nflverse's current season on
- * their own.
+ * Runs the schedule refresh, the stored-players stats refresh, the team defense refresh, the PFR
+ * advanced rushing enrichment, the Next Gen Stats enrichment, the snap count enrichment, the PFR
+ * advanced defense enrichment, and the team-strength (Elo) recompute when {@link
+ * StatsRefreshDueChecker} says it's due - all eight change on the same signal (a game completed),
+ * so they share one due-check instead of each needing their own. None of the eight scripts take a
+ * season argument here; all default to nflverse's current season (or, for {@code
+ * import_schedules.R}, the current calendar year - see that script) on their own.
+ *
+ * <p>Order matters at both ends: {@code import_schedules.R} runs first because everything else
+ * (player stats' schedule join for game_date/weather/Vegas columns, and the Elo recompute's own
+ * completed-game read) depends on {@code nfl_schedules} already reflecting this run's newest final
+ * scores/posted lines - added 2026-08-20 together with {@code compute_team_strength_ratings.R}
+ * (previously both had to be run manually, so the {@code /matchups} page and Elo ratings would go
+ * stale as soon as new games were actually played). {@code import_pfr_defense_advanced.R} still
+ * has to run after {@code import_team_defense.R} for the reason already documented below.
  */
 @Service
 public class StatsRefreshWorker {
 
   private static final Logger log = LoggerFactory.getLogger(StatsRefreshWorker.class);
+  private static final String SCHEDULES_SCRIPT_NAME = "import_schedules.R";
   private static final String PLAYER_STATS_SCRIPT_NAME = "refresh_stored_players_weekly.R";
   private static final String TEAM_DEFENSE_SCRIPT_NAME = "import_team_defense.R";
   private static final String PFR_ADVANCED_RUSHING_SCRIPT_NAME = "import_pfr_advanced_rushing.R";
+  private static final String NEXTGEN_STATS_SCRIPT_NAME = "import_nextgen_stats.R";
+  private static final String SNAP_COUNTS_SCRIPT_NAME = "import_snap_counts.R";
+  private static final String PFR_ADVANCED_DEFENSE_SCRIPT_NAME = "import_pfr_defense_advanced.R";
+  private static final String TEAM_STRENGTH_RATINGS_SCRIPT_NAME = "compute_team_strength_ratings.R";
 
   private final RScriptRunner rScriptRunner;
   private final StatsRefreshDueChecker statsRefreshDueChecker;
@@ -39,9 +54,14 @@ public class StatsRefreshWorker {
 
     try {
       if (statsRefreshDueChecker.isRefreshDue()) {
+        rScriptRunner.run(SCHEDULES_SCRIPT_NAME);
         rScriptRunner.run(PLAYER_STATS_SCRIPT_NAME);
         rScriptRunner.run(TEAM_DEFENSE_SCRIPT_NAME);
         rScriptRunner.run(PFR_ADVANCED_RUSHING_SCRIPT_NAME);
+        rScriptRunner.run(NEXTGEN_STATS_SCRIPT_NAME);
+        rScriptRunner.run(SNAP_COUNTS_SCRIPT_NAME);
+        rScriptRunner.run(PFR_ADVANCED_DEFENSE_SCRIPT_NAME);
+        rScriptRunner.run(TEAM_STRENGTH_RATINGS_SCRIPT_NAME);
       } else {
         log.debug("Stats refresh not due; skipping.");
       }

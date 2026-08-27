@@ -78,3 +78,7 @@ export function syncPlayerByAthleteId(athleteId) {
     method: "POST",
   });
 }
+
+export function getUpcomingTeamMatchups() {
+  return request("/api/team-matchups/upcoming");
+}

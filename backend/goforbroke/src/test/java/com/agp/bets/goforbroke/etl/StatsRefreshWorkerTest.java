@@ -22,9 +22,14 @@ class StatsRefreshWorkerTest {
 
     worker.refreshIfDueAsync().get();
 
+    verify(rScriptRunner).run("import_schedules.R");
     verify(rScriptRunner).run("refresh_stored_players_weekly.R");
     verify(rScriptRunner).run("import_team_defense.R");
     verify(rScriptRunner).run("import_pfr_advanced_rushing.R");
+    verify(rScriptRunner).run("import_nextgen_stats.R");
+    verify(rScriptRunner).run("import_snap_counts.R");
+    verify(rScriptRunner).run("import_pfr_defense_advanced.R");
+    verify(rScriptRunner).run("compute_team_strength_ratings.R");
   }
 
   @Test

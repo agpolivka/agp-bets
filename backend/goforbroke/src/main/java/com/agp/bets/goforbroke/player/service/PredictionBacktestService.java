@@ -11,6 +11,7 @@ import com.agp.bets.goforbroke.team.domain.Team;
 import com.agp.bets.goforbroke.team.domain.TeamDefenseGameStat;
 import com.agp.bets.goforbroke.team.repository.TeamDefenseGameStatRepository;
 import com.agp.bets.goforbroke.team.repository.TeamRepository;
+import com.agp.bets.goforbroke.team.service.NflverseTeamAbbreviations;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -78,6 +79,28 @@ public class PredictionBacktestService {
 
   public record MarketLineBacktestSummary(Map<String, MarketLineStats> byMetric) {}
 
+  /**
+   * One row of real, already-computed inputs for a single historical (player, target game, metric)
+   * - the raw material for a real coefficient-calibration regression (fit {@code actual ~
+   * recentAverage + seasonAverage + opponentAdjustment + ...} in R), instead of every coefficient
+   * in {@link PlayerPredictionService} staying a permanent hand-picked guess. Deliberately exposes
+   * {@code recentAverage}/{@code seasonAverage} separately rather than the already-blended {@code
+   * blendedMean} - calibrating the 0.65/0.35 blend split itself needs both terms as independent
+   * regression inputs, not their pre-combined value. Every other field is exactly what {@link
+   * PlayerPredictionService#buildProjection} already computed for that row (via the same {@code
+   * PredictionSummaryResponse} the live path returns) - no separate/duplicate feature computation
+   * that could silently drift from what predictions actually use.
+   */
+  public record CalibrationRow(
+      double actual,
+      double recentAverage,
+      double seasonAverage,
+      double opponentAdjustment,
+      double conditionsAdjustment,
+      double rushingQualityAdjustment,
+      double advancedMetricAdjustment,
+      double targetShareAdjustment) {}
+
   public OutcomeBacktestSummary runOutcomeBacktest() {
     Map<String, OutcomeAccumulator> accumulators = new LinkedHashMap<>();
 
@@ -89,10 +112,13 @@ public class PredictionBacktestService {
               continue;
             }
 
+            // gameStatus is deliberately null here - see PlayerPredictionService
+            // #injuryStatusMultiplier's doc: nothing in this database records what a player's
+            // weekly status *was* for a historical game, only the live-fetched current one exists.
             PredictionSummaryResponse projection =
                 predictionService.buildProjection(
                     metric, recentStats, allStats, position, opponentDefenseHistory, leagueAverages,
-                    gameConditionsFor(targetGame));
+                    gameConditionsFor(targetGame), null);
             accumulators
                 .computeIfAbsent(metric, key -> new OutcomeAccumulator())
                 .add(projection.mean(), actualValues.get(0));
@@ -133,10 +159,13 @@ public class PredictionBacktestService {
               continue;
             }
 
+            // gameStatus is deliberately null here - see PlayerPredictionService
+            // #injuryStatusMultiplier's doc: nothing in this database records what a player's
+            // weekly status *was* for a historical game, only the live-fetched current one exists.
             PredictionSummaryResponse projection =
                 predictionService.buildProjection(
                     metric, recentStats, allStats, position, opponentDefenseHistory, leagueAverages,
-                    gameConditionsFor(targetGame));
+                    gameConditionsFor(targetGame), null);
 
             double lineValue = matchingLine.getLine();
             double actual = actualValues.get(0);
@@ -152,6 +181,50 @@ public class PredictionBacktestService {
     Map<String, MarketLineStats> byMetric = new LinkedHashMap<>();
     accumulators.forEach((metric, accumulator) -> byMetric.put(metric, accumulator.toStats()));
     return new MarketLineBacktestSummary(byMetric);
+  }
+
+  /** See {@link CalibrationRow}'s doc - a one-off data export for offline (R) regression, not a live-facing summary. */
+  public Map<String, List<CalibrationRow>> runCalibrationExport() {
+    Map<String, List<CalibrationRow>> byMetric = new LinkedHashMap<>();
+
+    forEachBacktestableGame(
+        (player, position, targetGame, recentStats, allStats, opponentDefenseHistory, leagueAverages) -> {
+          for (String metric : predictionService.metricsForPosition(position)) {
+            List<Double> actualValues = predictionService.metricValues(List.of(targetGame), metric);
+            if (actualValues.isEmpty()) {
+              continue;
+            }
+
+            List<Double> recentValues = predictionService.metricValues(recentStats, metric);
+            List<Double> allValues = predictionService.metricValues(allStats, metric);
+            double recentAverage = average(recentValues);
+            double seasonAverage = average(allValues);
+
+            PredictionSummaryResponse projection =
+                predictionService.buildProjection(
+                    metric, recentStats, allStats, position, opponentDefenseHistory, leagueAverages,
+                    gameConditionsFor(targetGame), null);
+
+            byMetric
+                .computeIfAbsent(metric, key -> new ArrayList<>())
+                .add(
+                    new CalibrationRow(
+                        actualValues.get(0),
+                        recentAverage,
+                        seasonAverage,
+                        projection.opponentAdjustment(),
+                        projection.conditionsAdjustment(),
+                        projection.rushingQualityAdjustment(),
+                        projection.advancedMetricAdjustment(),
+                        projection.targetShareAdjustment()));
+          }
+        });
+
+    return byMetric;
+  }
+
+  private double average(List<Double> values) {
+    return values.isEmpty() ? 0.0d : values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
   }
 
   /**
@@ -206,9 +279,9 @@ public class PredictionBacktestService {
           .computeIfAbsent(defenseGame.getTeam().getId(), key -> new ArrayList<>())
           .add(defenseGame);
     }
-    Map<String, Team> teamsByEspnId = new LinkedHashMap<>();
+    Map<String, Team> teamsByAbbreviation = new LinkedHashMap<>();
     for (Team team : teamRepository.findAllByOrderByDisplayNameAsc()) {
-      teamsByEspnId.put(team.getEspnTeamId(), team);
+      teamsByAbbreviation.put(team.getAbbreviation(), team);
     }
 
     for (Player player : playerRepository.findAllByOrderByDisplayNameAsc()) {
@@ -234,7 +307,7 @@ public class PredictionBacktestService {
             priorGamesDesc.stream().limit(PlayerPredictionService.RECENT_GAME_WINDOW).toList();
 
         List<TeamDefenseGameStat> opponentDefenseHistory =
-            resolveOpponentDefenseHistory(targetGame, teamsByEspnId, defenseGamesByTeamId);
+            resolveOpponentDefenseHistory(targetGame, teamsByAbbreviation, defenseGamesByTeamId);
         List<TeamDefenseGameStat> leagueWindow =
             allDefenseGames.stream()
                 .filter(
@@ -256,13 +329,19 @@ public class PredictionBacktestService {
     }
   }
 
-  private List<TeamDefenseGameStat> resolveOpponentDefenseHistory(
-      PlayerGameStat targetGame, Map<String, Team> teamsByEspnId, Map<Long, List<TeamDefenseGameStat>> defenseGamesByTeamId) {
+  // Package-private (not private): covered directly by PredictionBacktestServiceTest, since this
+  // is exactly the kind of point-in-time opponent-resolution logic that's easy to silently break
+  // (see toEspnTeamAbbreviation's doc for a real case where it was broken for the entire session).
+  List<TeamDefenseGameStat> resolveOpponentDefenseHistory(
+      PlayerGameStat targetGame,
+      Map<String, Team> teamsByAbbreviation,
+      Map<Long, List<TeamDefenseGameStat>> defenseGamesByTeamId) {
     if (targetGame.getOpponentTeamId() == null) {
       return List.of();
     }
 
-    Team opponent = teamsByEspnId.get(targetGame.getOpponentTeamId());
+    Team opponent =
+        teamsByAbbreviation.get(NflverseTeamAbbreviations.toEspnAbbreviation(targetGame.getOpponentTeamId()));
     if (opponent == null) {
       return List.of();
     }

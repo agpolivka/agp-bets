@@ -7,6 +7,7 @@ import {
   getPlayerPredictions,
   getTeam,
   getTeamDefenseSummary,
+  getUpcomingTeamMatchups,
   searchPlayers,
   syncPlayerByAthleteId,
   syncPlayerStats,
@@ -241,8 +242,8 @@ function AppShell({ children }) {
           <nav className="topnav" aria-label="Primary">
             <Link to="/">Search</Link>
             <a href="#featured">Featured</a>
+            <Link to="/matchups">Matchups</Link>
             <Link to="/faq">FAQ</Link>
-            <a href="#login">Login</a>
           </nav>
         </div>
       </header>
@@ -361,33 +362,7 @@ function HomePage() {
             </div>
           </div>
 
-          <aside className="hero-aside" id="login">
-            <div className="panel-card spotlight">
-              <span className="card-label">Premier access</span>
-              <h2>Login will eventually unlock deeper insights.</h2>
-              <p>
-                This area is reserved for premium access later, so the app can grow into a public
-                and members-only experience without redesigning the whole front end.
-              </p>
-              <div className="login-form">
-                <label>
-                  Email
-                  <input type="email" placeholder="name@example.com" disabled />
-                </label>
-                <label>
-                  Password
-                  <input type="password" placeholder="Coming soon" disabled />
-                </label>
-                <button type="button" className="secondary" disabled>
-                  Sign in coming soon
-                </button>
-              </div>
-              <ul className="bullet-list">
-                <li>Premium insights will live here later.</li>
-                <li>Public browsing stays simple and fast.</li>
-              </ul>
-            </div>
-
+          <aside className="hero-aside">
             <div className="panel-card preview-card">
               <span className="card-label">Featured spotlight</span>
               <h2>{selectedPreview.name}</h2>
@@ -563,7 +538,17 @@ function UpcomingOpponentCard({ upcomingOpponent, opponentTeam, opponentDefense,
 
 function PredictionCard({ prediction }) {
   const meta = predictionMetricMeta(prediction.metric);
-  const adjustment = Number(prediction.opponentAdjustment ?? 0);
+  // Sum every adjustment term the backend computes, not just opponentAdjustment - a player whose
+  // weather/PFR/NGS/WOPR nudges are the dominant signal for a stat used to show no pill at all
+  // even when the projection moved meaningfully (e.g. targetShareAdjustment alone can be +20
+  // yards for a heavily-featured receiver).
+  const adjustment =
+    Number(prediction.opponentAdjustment ?? 0) +
+    Number(prediction.conditionsAdjustment ?? 0) +
+    Number(prediction.rushingQualityAdjustment ?? 0) +
+    Number(prediction.advancedMetricAdjustment ?? 0) +
+    Number(prediction.targetShareAdjustment ?? 0) +
+    Number(prediction.usageAdjustment ?? 0);
   const matchupTone = adjustment > 0.05 ? "favorable" : adjustment < -0.05 ? "tough" : null;
 
   return (
@@ -607,7 +592,12 @@ function PlayerDetailPage() {
   const headshotUrl = buildEspnHeadshotUrl(player?.espnAthleteId ?? athleteId);
   const isQuarterback = (player?.position ?? "").trim().toUpperCase() === "QB";
   const yardsPerGameLabel = isQuarterback ? "Passing and rushing yards per game" : "Yards per game";
-  const availability = resolveAvailability(player?.injuryStatus);
+  // Prefer the weekly Questionable/Doubtful/Out game-status designation over the roster-level
+  // injuryStatus (Active/Injured Reserve/etc.) when both exist - it's the more specific, more
+  // game-relevant signal (a player can show "Active" via injuryStatus while genuinely ruled out
+  // for this week's game - see WORKPLAN.md). Falls back to injuryStatus so IR/PUP/suspended
+  // players without a current weekly report still show something.
+  const availability = resolveAvailability(player?.gameStatus ?? player?.injuryStatus);
 
   useEffect(() => {
     let canceled = false;
@@ -1136,12 +1126,143 @@ function FaqPage() {
   );
 }
 
+const PLAYOFF_ROUND_LABELS = {
+  WC: "Wild Card",
+  DIV: "Divisional Round",
+  CON: "Conference Championship",
+  SB: "Super Bowl",
+};
+
+function matchupGroupLabel(matchup) {
+  if (matchup.gameType && matchup.gameType !== "REG") {
+    return PLAYOFF_ROUND_LABELS[matchup.gameType] ?? matchup.gameType;
+  }
+  return `Week ${matchup.week}`;
+}
+
+function groupMatchupsByWeek(matchups) {
+  const groups = new Map();
+  for (const matchup of matchups) {
+    const label = matchupGroupLabel(matchup);
+    if (!groups.has(label)) {
+      groups.set(label, []);
+    }
+    groups.get(label).push(matchup);
+  }
+  return Array.from(groups.entries());
+}
+
+function TeamMatchupCard({ matchup }) {
+  const homeIsPick = !matchup.predictedTie && matchup.predictedWinnerAbbreviation === matchup.homeTeamAbbreviation;
+  const confidence = Math.round((homeIsPick ? matchup.homeWinProbability : 1 - matchup.homeWinProbability) * 100);
+
+  return (
+    <article className="team-matchup-card">
+      <div className="team-matchup-teams">
+        <span className={`team-matchup-team${homeIsPick ? "" : " team-matchup-team-picked"}`}>
+          {matchup.awayTeamName}
+        </span>
+        <span className="team-matchup-at">@</span>
+        <span className={`team-matchup-team${homeIsPick ? " team-matchup-team-picked" : ""}`}>
+          {matchup.homeTeamName}
+        </span>
+      </div>
+      <div className="team-matchup-score">
+        {matchup.predictedAwayScore} - {matchup.predictedHomeScore}
+      </div>
+      <div className="team-matchup-meta">
+        {matchup.predictedTie ? (
+          <span className="team-matchup-pick">Predicted tie</span>
+        ) : (
+          <>
+            <span className="team-matchup-pick">
+              Pick: {homeIsPick ? matchup.homeTeamAbbreviation : matchup.awayTeamAbbreviation}
+            </span>
+            <span className="subtle">{confidence}% confidence</span>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function MatchupsPage() {
+  const [matchups, setMatchups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let canceled = false;
+    setLoading(true);
+    setError(null);
+
+    getUpcomingTeamMatchups()
+      .then((data) => {
+        if (!canceled) {
+          setMatchups(data ?? []);
+        }
+      })
+      .catch((fetchError) => {
+        if (!canceled) {
+          setError(fetchError.message ?? "Could not load matchup predictions.");
+        }
+      })
+      .finally(() => {
+        if (!canceled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  const weeks = groupMatchupsByWeek(matchups);
+
+  return (
+    <AppShell>
+      <main className="content">
+        <section className="panel section">
+          <Link className="back-link" to="/">
+            Back to search
+          </Link>
+          <div className="section-head">
+            <div>
+              <span className="section-kicker">Team matchups</span>
+              <h2>Who we're picking to win</h2>
+            </div>
+          </div>
+
+          {loading ? <p className="subtle">Loading matchup predictions...</p> : null}
+          {error ? <p className="inline-error">{error}</p> : null}
+          {!loading && !error && weeks.length === 0 ? (
+            <p className="empty-state">No upcoming matchups on file yet.</p>
+          ) : null}
+
+          {weeks.map(([weekLabel, weekMatchups]) => (
+            <div key={weekLabel} className="team-matchups-week">
+              <h3 className="team-matchups-week-heading">{weekLabel}</h3>
+              <div className="team-matchups-grid">
+                {weekMatchups.map((matchup) => (
+                  <TeamMatchupCard key={matchup.gameId} matchup={matchup} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      </main>
+    </AppShell>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/players/:athleteId" element={<PlayerDetailPage />} />
+        <Route path="/matchups" element={<MatchupsPage />} />
         <Route path="/faq" element={<FaqPage />} />
       </Routes>
     </BrowserRouter>

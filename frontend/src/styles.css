@@ -118,7 +118,6 @@ input:disabled {
 .brand-lockup strong,
 .hero h1,
 .section-head h2,
-.spotlight h2,
 .preview-card h2,
 .result-card h3,
 .featured-card strong,
@@ -274,7 +273,6 @@ input:disabled {
 .metric-card span,
 .result-card p,
 .result-meta,
-.spotlight p,
 .preview-card p,
 .featured-card p,
 .featured-card small,
@@ -304,8 +302,7 @@ input:disabled {
   font-size: 0.84rem;
 }
 
-.search-field input,
-.login-form input {
+.search-field input {
   width: 100%;
   margin-top: 0.45rem;
   padding: 1rem 1.05rem;
@@ -316,14 +313,12 @@ input:disabled {
   outline: none;
 }
 
-.search-field input:focus,
-.login-form input:focus {
+.search-field input:focus {
   border-color: rgba(255, 138, 91, 0.7);
   box-shadow: 0 0 0 3px rgba(255, 138, 91, 0.12);
 }
 
 .hero-search button,
-.login-form button,
 .action-row button,
 .back-link {
   align-self: end;
@@ -336,13 +331,6 @@ input:disabled {
   box-shadow: 0 16px 30px rgba(255, 117, 72, 0.18);
 }
 
-.secondary {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: var(--text) !important;
-  box-shadow: none !important;
-  border: 1px solid var(--stroke) !important;
-}
-
 .hero-aside {
   display: grid;
   gap: 0.85rem;
@@ -353,39 +341,11 @@ input:disabled {
   padding: 1.2rem;
 }
 
-.spotlight {
-  min-height: 100%;
-}
-
-.spotlight h2,
 .preview-card h2 {
   margin: 0.4rem 0 0;
   font-size: 1.65rem;
   line-height: 1.12;
   letter-spacing: -0.03em;
-}
-
-.login-form {
-  display: grid;
-  gap: 0.85rem;
-  margin-top: 1rem;
-}
-
-.login-form label {
-  display: block;
-  color: var(--muted);
-  font-size: 0.84rem;
-}
-
-.bullet-list {
-  margin: 1rem 0 0;
-  padding-left: 1rem;
-  color: var(--muted);
-  line-height: 1.6;
-}
-
-.bullet-list li + li {
-  margin-top: 0.4rem;
 }
 
 .preview-card .preview-notes {
@@ -624,6 +584,74 @@ input:disabled {
 .matchup-pill.matchup-tough {
   color: #2a0505;
   background: var(--accent-2);
+}
+
+.team-matchups-week {
+  margin-top: 1.6rem;
+}
+
+.team-matchups-week-heading {
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+
+.team-matchups-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.85rem;
+}
+
+.team-matchup-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--panel-strong);
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+}
+
+.team-matchup-teams {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.92rem;
+}
+
+.team-matchup-team {
+  color: var(--muted);
+}
+
+.team-matchup-team-picked {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.team-matchup-at {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.team-matchup-score {
+  margin-top: 0.5rem;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.team-matchup-meta {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.team-matchup-pick {
+  color: var(--accent-3);
+  font-weight: 800;
 }
 
 .availability-row {

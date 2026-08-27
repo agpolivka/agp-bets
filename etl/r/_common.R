@@ -56,11 +56,15 @@ shape_player_week_stats <- function(joined) {
       temp_fahrenheit = coalesce(temp_home, temp_away),
       wind_mph = coalesce(wind_home, wind_away),
       game_total_line = coalesce(total_line_home, total_line_away),
-      # spread_line is home-team-perspective in nflverse (negative = home favored) - flip the sign
-      # for the away team so this always reads as "this player's own team is favored by X."
+      # spread_line is already the home team's own implied margin directly - positive means home
+      # favored, confirmed empirically 2026-08-20 (not the traditional bookmaker "favorite gets a
+      # minus sign" notation this was originally written to assume - real spread_line correlates
+      # +0.43 with real home margin, its negation correlates -0.43, so the sign here was backwards
+      # from when this column was first added). Flip the sign only for the away team's own row,
+      # since a positive home spread means the away team is the underdog by that same amount.
       team_implied_spread = case_when(
-        !is.na(game_date_home) ~ -spread_line_home,
-        !is.na(game_date_away) ~ spread_line_away,
+        !is.na(game_date_home) ~ spread_line_home,
+        !is.na(game_date_away) ~ -spread_line_away,
         TRUE ~ NA_real_
       ),
       games_played = 1L,
@@ -78,6 +82,11 @@ shape_player_week_stats <- function(joined) {
       receptions = coalesce(receptions, 0L),
       receiving_yards = coalesce(receiving_yards, 0L),
       total_yards = coalesce(passing_yards, 0L) + coalesce(rushing_yards, 0L) + coalesce(receiving_yards, 0L),
+      # target_share/air_yards_share/wopr already come through unchanged from load_player_stats()
+      # (nothing upstream drops them) - no coalesce needed here, they're just passed through so
+      # write_player_game_stats can select them by name. snap_count stays NA here on purpose -
+      # box-score data has no real snap counts; import_snap_counts.R enriches it separately (same
+      # UPDATE-after-the-fact shape as import_pfr_advanced_rushing.R), same reason drops stays NA.
       snap_count = NA_integer_,
       drops = NA_integer_,
       source_url = paste0("https://nflverse.nflverse.com/player-stats/", season),
@@ -202,10 +211,22 @@ fetch_and_shape_player_week_stats_multi <- function(con, seasons, espn_athlete_i
     shape_player_week_stats()
 }
 
-# Upserts (via delete-then-insert on player_id/season/week) a shaped stats data frame produced by
-# fetch_and_shape_player_week_stats() into player_game_stats, and records the run in
+# Upserts (real INSERT ... ON CONFLICT, backed by the uq_player_game_stats_player_season_week
+# constraint on player_id/season/week - see PlayerGameStat.java) a shaped stats data frame produced
+# by fetch_and_shape_player_week_stats() into player_game_stats, and records the run in
 # etl_import_runs. Rows for players not found in the local `players` table are skipped. Returns
 # the number of rows written.
+#
+# Was DELETE-then-INSERT until 2026-08-20, when that approach was found to silently wipe every
+# enrichment column this function doesn't itself set (snap_count, and everything import_pfr_
+# advanced_rushing.R/import_nextgen_stats.R/import_snap_counts.R write via UPDATE afterward)
+# whenever a box-score refresh ran for an already-enriched player/season/week - real data loss,
+# discovered when a coefficient-calibration regression found passing_cpoe/receiving_yac_above_
+# expectation/etc. completely empty despite having been populated days earlier. The ON CONFLICT DO
+# UPDATE SET clause below deliberately excludes every enrichment-only column (and created_at, so a
+# refresh doesn't reset a row's original creation timestamp) - anything not listed there is simply
+# left alone by Postgres on conflict, which is the actual fix: this function can now only ever
+# touch the columns it owns, instead of relying on script run order to self-heal afterward.
 write_player_game_stats <- function(con, stats, job_name, notes) {
   dbExecute(
     con,
@@ -243,12 +264,6 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
 
     dbExecute(
       con,
-      "delete from player_game_stats where player_id = $1 and season = $2 and week = $3",
-      params = list(player_id, row$season[[1]], row$week[[1]])
-    )
-
-    dbExecute(
-      con,
       "
       insert into player_game_stats (
         player_id, game_date, season, week, home_away, opponent_name, opponent_team_id,
@@ -256,11 +271,48 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
         rushing_touchdowns, receiving_touchdowns, touchdowns, total_touchdowns, interceptions,
         fumbles, fumbles_lost, turnovers, snap_count, carries, receiving_targets, receptions,
         receiving_yards, drops, roof, surface, temp_fahrenheit, wind_mph, team_implied_spread,
-        game_total_line, source_url, raw_payload, fetched_at, created_at, updated_at
+        game_total_line, target_share, air_yards_share, wopr, source_url, raw_payload, fetched_at,
+        created_at, updated_at
       ) values (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
-        $26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37
+        $26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40
       )
+      on conflict (player_id, season, week) do update set
+        game_date = excluded.game_date,
+        home_away = excluded.home_away,
+        opponent_name = excluded.opponent_name,
+        opponent_team_id = excluded.opponent_team_id,
+        games_played = excluded.games_played,
+        passing_yards = excluded.passing_yards,
+        rushing_yards = excluded.rushing_yards,
+        total_yards = excluded.total_yards,
+        passing_touchdowns = excluded.passing_touchdowns,
+        rushing_touchdowns = excluded.rushing_touchdowns,
+        receiving_touchdowns = excluded.receiving_touchdowns,
+        touchdowns = excluded.touchdowns,
+        total_touchdowns = excluded.total_touchdowns,
+        interceptions = excluded.interceptions,
+        fumbles = excluded.fumbles,
+        fumbles_lost = excluded.fumbles_lost,
+        turnovers = excluded.turnovers,
+        carries = excluded.carries,
+        receiving_targets = excluded.receiving_targets,
+        receptions = excluded.receptions,
+        receiving_yards = excluded.receiving_yards,
+        drops = excluded.drops,
+        roof = excluded.roof,
+        surface = excluded.surface,
+        temp_fahrenheit = excluded.temp_fahrenheit,
+        wind_mph = excluded.wind_mph,
+        team_implied_spread = excluded.team_implied_spread,
+        game_total_line = excluded.game_total_line,
+        target_share = excluded.target_share,
+        air_yards_share = excluded.air_yards_share,
+        wopr = excluded.wopr,
+        source_url = excluded.source_url,
+        raw_payload = excluded.raw_payload,
+        fetched_at = excluded.fetched_at,
+        updated_at = excluded.updated_at
       ",
       params = list(
         player_id,
@@ -295,6 +347,9 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
         row$wind_mph[[1]],
         row$team_implied_spread[[1]],
         row$game_total_line[[1]],
+        row$target_share[[1]],
+        row$air_yards_share[[1]],
+        row$wopr[[1]],
         row$source_url[[1]],
         row$raw_payload[[1]],
         row$fetched_at[[1]],
@@ -314,13 +369,22 @@ write_player_game_stats <- function(con, stats, job_name, notes) {
   written
 }
 
-# nflverse team abbreviations differ from ESPN's (which our `teams` table uses) for exactly two
-# franchises: the Rams ("LA" vs "LAR") and Washington ("WAS" vs "WSH"). Every other abbreviation
-# matches. Apply this before looking up a team by abbreviation against Postgres.
+# nflverse team abbreviations differ from ESPN's (which our `teams` table uses) for the Rams
+# ("LA" vs "LAR") and Washington ("WAS" vs "WSH"), plus three real franchise relocations nflverse's
+# historical data still codes under the old city (our `teams` table only has the current identity,
+# since Team is a current-roster/branding snapshot, not a historical record) - the Raiders
+# (Oakland through 2019, "OAK" -> "LV"), the Chargers (San Diego through 2016, "SD" -> "LAC"), and
+# the Rams' earlier stint (St. Louis through 2015, "STL" -> "LAR", same target as "LA" above).
+# Found 2026-08-19 while backfilling team_strength_ratings back to 2014 - none of the box-score/
+# defense scripts had hit these codes before since they hadn't pulled data that far back. Every
+# other abbreviation matches. Apply this before looking up a team by abbreviation against Postgres.
 to_espn_team_abbreviation <- function(nflverse_abbreviation) {
   dplyr::case_when(
     nflverse_abbreviation == "LA" ~ "LAR",
     nflverse_abbreviation == "WAS" ~ "WSH",
+    nflverse_abbreviation == "OAK" ~ "LV",
+    nflverse_abbreviation == "SD" ~ "LAC",
+    nflverse_abbreviation == "STL" ~ "LAR",
     TRUE ~ nflverse_abbreviation
   )
 }
