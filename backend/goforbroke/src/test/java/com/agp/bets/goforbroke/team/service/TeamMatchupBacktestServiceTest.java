@@ -5,8 +5,12 @@ import static org.mockito.Mockito.when;
 
 import com.agp.bets.goforbroke.team.domain.NflSchedule;
 import com.agp.bets.goforbroke.team.domain.Team;
+import com.agp.bets.goforbroke.team.domain.TeamDefenseGameStat;
+import com.agp.bets.goforbroke.team.domain.TeamOffenseGameStat;
 import com.agp.bets.goforbroke.team.domain.TeamStrengthRating;
 import com.agp.bets.goforbroke.team.repository.NflScheduleRepository;
+import com.agp.bets.goforbroke.team.repository.TeamDefenseGameStatRepository;
+import com.agp.bets.goforbroke.team.repository.TeamOffenseGameStatRepository;
 import com.agp.bets.goforbroke.team.repository.TeamStrengthRatingRepository;
 import java.time.LocalDate;
 import java.util.List;
@@ -17,8 +21,17 @@ class TeamMatchupBacktestServiceTest {
 
   private final TeamStrengthRatingRepository repository = Mockito.mock(TeamStrengthRatingRepository.class);
   private final NflScheduleRepository nflScheduleRepository = Mockito.mock(NflScheduleRepository.class);
+  private final TeamOffenseGameStatRepository teamOffenseGameStatRepository =
+      Mockito.mock(TeamOffenseGameStatRepository.class);
+  private final TeamDefenseGameStatRepository teamDefenseGameStatRepository =
+      Mockito.mock(TeamDefenseGameStatRepository.class);
   private final TeamMatchupBacktestService service =
-      new TeamMatchupBacktestService(repository, nflScheduleRepository, new TeamMatchupPredictionService());
+      new TeamMatchupBacktestService(
+          repository,
+          nflScheduleRepository,
+          teamOffenseGameStatRepository,
+          teamDefenseGameStatRepository,
+          new TeamMatchupPredictionService());
 
   @Test
   void matchesHomeAndAwayRowsForTheSameGameThroughTheCrosswalkAndScoresThePrediction() {
@@ -82,11 +95,45 @@ class TeamMatchupBacktestServiceTest {
     TeamMatchupBacktestService.TotalsBacktestSummary summary = service.runTotalsBacktest();
 
     assertEquals(1, summary.games());
-    // expectedHomeScore = (24 scored + 14 allowed) / 2 = 19; expectedAwayScore = (20 + 10) / 2 = 15;
-    // predictedTotal = 34. actualTotal = 30 + 20 = 50.
-    assertEquals(34.0d, summary.meanPredictedTotal(), 0.0001d);
+    // 2026-08-28 real-calibrated formula (see TOTAL_POINTS_INTERCEPT's doc): 20.9851 +
+    // 0.4702*24(home scored) + 0.1335*10(home allowed) + 0.3024*20(away scored) +
+    // 0.1741*14(away allowed) = 42.0903. actualTotal = 30 + 20 = 50 (real data, unchanged).
+    assertEquals(42.0903d, summary.meanPredictedTotal(), 0.0001d);
     assertEquals(50.0d, summary.meanActualTotal(), 0.0001d);
-    assertEquals(16.0d, summary.meanAbsoluteError(), 0.0001d);
+    assertEquals(7.9097d, summary.meanAbsoluteError(), 0.0001d);
+  }
+
+  @Test
+  void backtestUsesTheRealCalibratedOffenseDefenseMarginWhenTrailingHistoryExists() {
+    Team chiefs = new Team();
+    chiefs.setId(1L);
+    chiefs.setAbbreviation("KC");
+    Team rams = new Team();
+    rams.setId(2L);
+    rams.setAbbreviation("LAR");
+
+    // Same shape as the totals-backtest fixture above - week 1 feeds week 2's trailing averages.
+    TeamStrengthRating chiefsWeek1 = rating(chiefs, "2025-09-07", "away", "LAR", 24, 10);
+    TeamStrengthRating ramsWeek1 = rating(rams, "2025-09-07", "home", "KC", 20, 14);
+
+    TeamStrengthRating chiefsWeek2 = rating(chiefs, "2025-09-14", "home", "LA", 30, 20);
+    chiefsWeek2.setRatingBefore(1600.0d);
+    TeamStrengthRating ramsWeek2 = rating(rams, "2025-09-14", "away", "KC", 20, 30);
+    ramsWeek2.setRatingBefore(1500.0d);
+
+    when(repository.findAll()).thenReturn(List.of(chiefsWeek1, ramsWeek1, chiefsWeek2, ramsWeek2));
+
+    TeamMatchupBacktestService.TeamMatchupBacktestSummary summary = service.runBacktest();
+
+    assertEquals(1, summary.games());
+    // homeRecentScored=24 (chiefs' own week-1 output), homeRecentAllowed=10, awayRecentScored=20
+    // (rams' own week-1 output) - real prior history, not the null-fallback case. eloPredictedMargin
+    // = (1600-1500+55)/25 = 6.2. predictedMargin = 5.8815 + 0.6427*6.2 + 0.2283*24 - 0.1948*10 -
+    // 0.2695*20 = 8.00744 (2026-08-28 real-calibrated formula - see
+    // TeamMatchupPredictionService.OFFENSE_DEFENSE_INTERCEPT's doc). If this were still using the
+    // pure-Elo fallback (margin 6.2), the error below would be 3.8, not 1.99256 - a direct proof
+    // the enriched formula is what actually ran.
+    assertEquals(1.99256d, summary.meanAbsoluteMarginError(), 0.0001d);
   }
 
   @Test
@@ -273,5 +320,94 @@ class TeamMatchupBacktestServiceTest {
     TeamMatchupBacktestService.TeamMatchupBacktestSummary summary = service.runBacktest();
 
     assertEquals(0, summary.games());
+  }
+
+  @Test
+  void styleCalibrationExportComputesTrailingAveragesForBothSidesOfBothOffenseAndDefense() {
+    Team chiefs = new Team();
+    chiefs.setId(1L);
+    chiefs.setAbbreviation("KC");
+    Team rams = new Team();
+    rams.setId(2L);
+    rams.setAbbreviation("LAR");
+
+    TeamStrengthRating homeRow = rating(chiefs, "2025-09-14", "home", "LA", 30, 20);
+    homeRow.setRatingBefore(1550.0d);
+    TeamStrengthRating awayRow = rating(rams, "2025-09-14", "away", "KC", 20, 30);
+    awayRow.setRatingBefore(1500.0d);
+    when(repository.findAll()).thenReturn(List.of(homeRow, awayRow));
+
+    when(teamOffenseGameStatRepository.findAll())
+        .thenReturn(
+            List.of(
+                offenseStat(chiefs, "2025-09-07", 0.6d, 0.5d),
+                offenseStat(rams, "2025-09-07", 0.5d, 0.4d)));
+    when(teamDefenseGameStatRepository.findAll())
+        .thenReturn(
+            List.of(
+                defenseStat(chiefs, "2025-09-07", 0.3d, 4.0d, 6.0d, 8),
+                defenseStat(rams, "2025-09-07", 0.35d, 4.5d, 6.5d, 9)));
+
+    List<TeamMatchupBacktestService.StyleCalibrationRow> rows = service.runStyleCalibrationExport();
+
+    assertEquals(1, rows.size());
+    TeamMatchupBacktestService.StyleCalibrationRow row = rows.get(0);
+    assertEquals(10.0d, row.actualMargin(), 0.0001d);
+    // predictedMargin = (1550 - 1500 + 55) / 25 = 4.2.
+    assertEquals(4.2d, row.eloPredictedMargin(), 0.0001d);
+    assertEquals(0.6d, row.homePassRate(), 0.0001d);
+    assertEquals(0.5d, row.homeShotgunRate(), 0.0001d);
+    assertEquals(0.5d, row.awayPassRate(), 0.0001d);
+    assertEquals(0.4d, row.awayShotgunRate(), 0.0001d);
+    assertEquals(0.3d, row.homeZoneCoverageRate(), 0.0001d);
+    assertEquals(4.0d, row.homeAvgPassRushers(), 0.0001d);
+    assertEquals(6.0d, row.homeAvgDefendersInBox(), 0.0001d);
+    assertEquals(8.0d, row.homePressures(), 0.0001d);
+    assertEquals(0.35d, row.awayZoneCoverageRate(), 0.0001d);
+    assertEquals(4.5d, row.awayAvgPassRushers(), 0.0001d);
+    assertEquals(6.5d, row.awayAvgDefendersInBox(), 0.0001d);
+    assertEquals(9.0d, row.awayPressures(), 0.0001d);
+  }
+
+  @Test
+  void styleCalibrationExportSkipsGamesWithNoOffenseOrDefenseHistoryYet() {
+    Team chiefs = new Team();
+    chiefs.setId(1L);
+    chiefs.setAbbreviation("KC");
+    Team rams = new Team();
+    rams.setId(2L);
+    rams.setAbbreviation("LAR");
+
+    TeamStrengthRating homeRow = rating(chiefs, "2025-09-14", "home", "LA", 30, 20);
+    homeRow.setRatingBefore(1550.0d);
+    TeamStrengthRating awayRow = rating(rams, "2025-09-14", "away", "KC", 20, 30);
+    awayRow.setRatingBefore(1500.0d);
+    when(repository.findAll()).thenReturn(List.of(homeRow, awayRow));
+    // No offense/defense rows stored for either team yet.
+
+    List<TeamMatchupBacktestService.StyleCalibrationRow> rows = service.runStyleCalibrationExport();
+
+    assertEquals(0, rows.size());
+  }
+
+  private TeamOffenseGameStat offenseStat(Team team, String gameDate, double passRate, double shotgunRate) {
+    TeamOffenseGameStat stat = new TeamOffenseGameStat();
+    stat.setTeam(team);
+    stat.setGameDate(LocalDate.parse(gameDate));
+    stat.setPassRate(passRate);
+    stat.setShotgunRate(shotgunRate);
+    return stat;
+  }
+
+  private TeamDefenseGameStat defenseStat(
+      Team team, String gameDate, double zoneCoverageRate, double avgPassRushers, double avgDefendersInBox, int pressures) {
+    TeamDefenseGameStat stat = new TeamDefenseGameStat();
+    stat.setTeam(team);
+    stat.setGameDate(LocalDate.parse(gameDate));
+    stat.setZoneCoverageRate(zoneCoverageRate);
+    stat.setAvgPassRushers(avgPassRushers);
+    stat.setAvgDefendersInBox(avgDefendersInBox);
+    stat.setPressures(pressures);
+    return stat;
   }
 }

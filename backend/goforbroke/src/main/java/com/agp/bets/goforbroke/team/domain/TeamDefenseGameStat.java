@@ -85,6 +85,35 @@ public class TeamDefenseGameStat {
   // defender in the game, not a naive average of each defender's own percentage.
   private Double missedTacklePct;
 
+  // Per-play defensive charting (nflreadr::load_participation()), aggregated up to a team-game
+  // average - that source is one row per play (with the offense's team already labeled, not the
+  // defense's), so etl/r/import_participation_defense.R first derives the defending team via
+  // nfl_schedules' home/away, then averages across every defensive play in the game, same
+  // averaging shape as missedTacklePct above. Only reliably populated for 2023 onward - confirmed
+  // live: 0% NA 2023-2025, ~62% NA 2018-2022 (not trustworthy at that rate), 100% NA 2017 and
+  // earlier (the underlying charting doesn't exist yet). Null until that script has run for this
+  // team/game, and null forever for games this data source doesn't cover.
+
+  // Share of the defense's own plays run in zone coverage (vs. man) - defense_man_zone_type.
+  // Real-calibrated (2026-08-26): a significant, incremental trailing predictor of
+  // receivingYards/receptions even controlling for pressures/missedTacklePct above - see
+  // PlayerPredictionService#ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT's doc for the regression,
+  // and its own doc for why "significant even controlling for what's already wired" is the real
+  // bar this had to clear (a same-game correlation alone wasn't enough - see WORKPLAN.md).
+  private Double zoneCoverageRate;
+
+  // Average number of pass rushers sent per defensive play - number_of_pass_rushers. A strategy
+  // signal (how many rushers sent), deliberately distinct from `pressures` above (a PFR-sourced
+  // count of how often a rush actually got there). Tested the same way as zoneCoverageRate
+  // (2026-08-26) but did NOT hold up as a real trailing predictor (p=0.10-0.97) - stored, not
+  // wired into any live adjustment, a real checked negative result.
+  private Double avgPassRushers;
+
+  // Average defenders in the box per defensive play - defenders_in_box, a run-support signal.
+  // Also tested (2026-08-26) and did not hold up (p=0.17, and the sign flipped from the
+  // misleading same-game correlation that first found this) - stored, not wired in.
+  private Double avgDefendersInBox;
+
   @Column(nullable = false, length = 512)
   private String sourceUrl;
 

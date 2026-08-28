@@ -210,6 +210,135 @@ function summarizeGame(stat, playerPosition) {
   ].join(" | ");
 }
 
+// Groups positions the same way the backend's SKILL_POSITIONS/metricsForPosition does (see
+// PlayerPredictionService), so the top summary cards ask about the stats a position actually
+// posts instead of a generic yards/TDs/turnovers row for everyone - a QB's turnover rate and a
+// WR's target share aren't comparable numbers, so they shouldn't share one card layout.
+const POSITION_SUMMARY_GROUP = {
+  QB: "QB",
+  RB: "RB",
+  WR: "RECEIVER",
+  TE: "RECEIVER",
+  FB: "RECEIVER",
+};
+
+function getPositionSummaryGroup(position) {
+  return POSITION_SUMMARY_GROUP[(position ?? "").trim().toUpperCase()] ?? "GENERIC";
+}
+
+// Builds the 3-4 hero summary cards for a given stat window (overallSummary/lastFiveSummary/
+// etc. from PlayerInsightsResponse) - every field referenced here already exists on
+// PlayerStatInsightSummary, so this is purely a frontend reshuffle, no backend change needed.
+function buildPositionSummaryCards(position, summary) {
+  if (!summary) {
+    return [];
+  }
+
+  const group = getPositionSummaryGroup(position);
+
+  if (group === "QB") {
+    return [
+      {
+        label: "Passing yards/g",
+        value: formatPace(summary.passingYardsPerGame),
+        detail: `${formatNumber(summary.passingYardsTotal ?? 0)} passing yards across ${formatNumber(summary.games ?? 0)} games.`,
+      },
+      {
+        label: "Passing TDs/g",
+        value: formatPace(summary.passingTouchdownsPerGame),
+        detail: `${formatNumber(summary.passingTouchdownsTotal ?? 0)} passing touchdowns.`,
+      },
+      {
+        label: "Rushing yards/g",
+        value: formatPace(summary.rushingYardsPerGame),
+        detail: `${formatNumber(summary.rushingYardsTotal ?? 0)} rushing yards.`,
+      },
+      {
+        label: "Turnovers/g",
+        value: formatPace(summary.turnoversPerGame),
+        detail: `${formatNumber(summary.interceptionsTotal ?? 0)} interceptions, ${formatNumber(summary.fumblesLostTotal ?? 0)} lost fumbles.`,
+      },
+    ];
+  }
+
+  if (group === "RB") {
+    return [
+      {
+        label: "Rushing yards/g",
+        value: formatPace(summary.rushingYardsPerGame),
+        detail: `${formatPace(summary.carriesPerGame)} carries/g, ${formatNumber(summary.rushingYardsTotal ?? 0)} yards total.`,
+      },
+      {
+        label: "Rushing TDs/g",
+        value: formatPace(summary.rushingTouchdownsPerGame),
+        detail: `${formatNumber(summary.rushingTouchdownsTotal ?? 0)} rushing touchdowns.`,
+      },
+      {
+        label: "Receiving yards/g",
+        value: formatPace(summary.receivingYardsPerGame),
+        detail: `${formatPace(summary.receptionsPerGame)} receptions on ${formatPace(summary.receivingTargetsPerGame)} targets/g.`,
+      },
+      {
+        label: "Turnovers/g",
+        value: formatPace(summary.turnoversPerGame),
+        detail: `${formatNumber(summary.fumblesLostTotal ?? 0)} lost fumbles.`,
+      },
+    ];
+  }
+
+  if (group === "RECEIVER") {
+    const targetsPerGame = summary.receivingTargetsPerGame ?? 0;
+    const receptionsPerGame = summary.receptionsPerGame ?? 0;
+    const catchRateDetail =
+      targetsPerGame > 0
+        ? `${Math.round((receptionsPerGame / targetsPerGame) * 100)}% catch rate.`
+        : "No target data on record yet.";
+
+    return [
+      {
+        label: "Targets/g",
+        value: formatPace(summary.receivingTargetsPerGame),
+        detail: "Opportunity - how often the offense looks their way.",
+      },
+      {
+        label: "Receptions/g",
+        value: formatPace(summary.receptionsPerGame),
+        detail: catchRateDetail,
+      },
+      {
+        label: "Receiving yards/g",
+        value: formatPace(summary.receivingYardsPerGame),
+        detail: `${formatNumber(summary.receivingYardsTotal ?? 0)} receiving yards total.`,
+      },
+      {
+        label: "Receiving TDs/g",
+        value: formatPace(summary.receivingTouchdownsPerGame),
+        detail: `${formatNumber(summary.receivingTouchdownsTotal ?? 0)} receiving touchdowns.`,
+      },
+    ];
+  }
+
+  // GENERIC fallback for an unknown/unrecognized position - same shape the page always showed
+  // before position-aware cards existed.
+  return [
+    {
+      label: "Yards per game",
+      value: formatPace(summary.totalYardsPerGame),
+      detail: "Combined passing, rushing, and receiving yards.",
+    },
+    {
+      label: "Touchdowns per game",
+      value: formatPace(summary.totalTouchdownsPerGame),
+      detail: "Total touchdowns across all loaded games.",
+    },
+    {
+      label: "Turnovers per game",
+      value: formatPace(summary.turnoversPerGame),
+      detail: "Interceptions plus fumbles lost.",
+    },
+  ];
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -591,7 +720,6 @@ function PlayerDetailPage() {
 
   const headshotUrl = buildEspnHeadshotUrl(player?.espnAthleteId ?? athleteId);
   const isQuarterback = (player?.position ?? "").trim().toUpperCase() === "QB";
-  const yardsPerGameLabel = isQuarterback ? "Passing and rushing yards per game" : "Yards per game";
   // Prefer the weekly Questionable/Doubtful/Out game-status designation over the roster-level
   // injuryStatus (Active/Injured Reserve/etc.) when both exist - it's the more specific, more
   // game-relevant signal (a player can show "Active" via injuryStatus while genuinely ruled out
@@ -869,31 +997,9 @@ function PlayerDetailPage() {
               </div>
 
               <div className="insight-grid">
-                <SummaryCard
-                  label={yardsPerGameLabel}
-                  value={
-                    isQuarterback
-                      ? `${formatPace(insights.overallSummary?.passingYardsPerGame)} pass | ${formatPace(
-                          insights.overallSummary?.rushingYardsPerGame,
-                        )} rush`
-                      : formatPace(insights.overallSummary?.totalYardsPerGame)
-                  }
-                  detail={
-                    isQuarterback
-                      ? "Passing and rushing are shown separately for quarterbacks."
-                      : "Combined passing, rushing, and receiving yards."
-                  }
-                />
-                <SummaryCard
-                  label="Touchdowns per game"
-                  value={formatPace(insights.overallSummary?.totalTouchdownsPerGame)}
-                  detail="Total touchdowns across all loaded games."
-                />
-                <SummaryCard
-                  label="Turnovers per game"
-                  value={formatPace(insights.overallSummary?.turnoversPerGame)}
-                  detail="Interceptions plus fumbles lost."
-                />
+                {buildPositionSummaryCards(player?.position, insights.overallSummary).map((card) => (
+                  <SummaryCard key={card.label} label={card.label} value={card.value} detail={card.detail} />
+                ))}
               </div>
 
               <div className="summary-grid summary-grid-detail">
@@ -1068,7 +1174,7 @@ const FAQ_ENTRIES = [
   {
     question: "How is the projected stat line calculated?",
     answer:
-      "Each number blends the player's last 5 games with their season average (weighted 65/35 toward recent form), then adjusts for how the upcoming opponent's defense has played compared to the rest of the league this season.",
+      "Each number starts as a blend of the player's last 5 games and their season average (weighted 65/35 toward recent form), then gets nudged by several factors: how the upcoming opponent's defense has played compared to the rest of the league, weather and the Vegas game total, the player's own recent role (target share, PFR/Next Gen advanced metrics), and a weekly Questionable/Doubtful/Out designation if one exists. Every nudge is a small, explainable adjustment on top of that blend, not a separate model.",
   },
   {
     question: "Why don't you show a confidence range or score?",
@@ -1093,7 +1199,7 @@ const FAQ_ENTRIES = [
   {
     question: "What's not factored in yet?",
     answer:
-      "Snap counts, drops, injury status, weather, and betting-market lines aren't part of the model yet. The opponent adjustment is also intentionally a small nudge, not the dominant factor, since it's not been backtested against real outcomes.",
+      "Real betting-market lines aren't factored in yet - that's the single biggest gap, since it means we can't yet measure whether a projection actually beats what a sportsbook posts. Weather, the Vegas game total, weekly injury/game-status designations, target share, and opponent defensive tendencies (including pass rush and missed-tackle rate) are all factored in. Offensive snap share is tracked but deliberately left out of the live projection for now - testing it against real outcomes didn't show a clear improvement.",
   },
 ];
 

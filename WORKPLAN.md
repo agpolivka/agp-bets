@@ -58,58 +58,563 @@ If something here turns out to be durable/ongoing rather than a near-term loose 
 into the numbered Priority list below instead of leaving it here. Expected to be mostly or fully
 cleared out at the start of most sessions.
 
-**Fully cleared as of 2026-08-20** - the entire prior rotating list (injury feed, snap counts/
-target share, coefficient calibration, team-implied-spread investigation, the UX pill gap, and all
-three of Priority 5's remaining gaps: scheduler wiring, the beat-the-spread backtest, and the team
-offense/defense investigation) is done - see Recently Completed for the full writeups, including
-two real bugs this session found and fixed along the way (a data-loss bug in the box-score
-upsert path, and a sign-convention bug affecting both the new spread backtest and
-`team_implied_spread`). Top priority for next session:
+**Cleared as of 2026-08-22/26** - the 2026-08-20 rotating list (timezone bug, `offenseSnapPct` ->
+`usageAdjustment` wiring) is done; see Recently Completed. **Priority 1's paid-provider decision is
+explicitly deferred (2026-08-26, user direction)** - not revisiting until the free-data/UX backlog
+below is worked through further; provider research from 2026-08-10 stays valid whenever it comes
+back up.
 
-1. **Revisit Priority 1's paid-provider decision.** This is the explicit trigger WORKPLAN itself
-   has been pointing at all session: free-data improvements to the player-prop model have now been
-   pushed hard (injury status, target share/WOPR, real coefficient calibration, snap counts stored).
-   The core mission - "did this beat the market" - still isn't measurable without real historical
-   player-prop lines. Provider research is already done (see Priority 1's section): **The Odds API**
-   ($99/mo) is the deepest real option, historical player props back to May 2023 (~2.5-3 seasons);
-   **odds-api.io** is free but only has real historical props from Dec 2025 onward (~2 months) -
-   enough to bootstrap the backtest harness, not a real multi-season validation. This is a real
-   spend decision, needs explicit user sign-off before any implementation starts.
-2. **Visually verify tonight's UI changes in a browser** - no browser tool was available this
-   session, so the `/matchups` page, the removed login UI, and tonight's `PredictionCard` pill fix
-   have only been verified via API responses, never rendered. Worth a real look once the frontend is
-   running (`start-dev.ps1`/`start-dev.sh`) before trusting the UI matches what the API implies.
-3. ~~Verify the Postgres container's timezone setting against StatsRefreshDueChecker's due
-   logic~~ **Done - real bug found and fixed (2026-08-20, later)**: the container runs UTC.
-   Traced through the actual consequence: an 8:15pm ET Monday-night kickoff is already past
-   midnight UTC during EDT, so the old `current_date`-based check could flip to "due" hours
-   *before* a late game even starts, not safely after - and because it also records that early,
-   no-op run's completion date, the real final score could then be missed for up to a full extra
-   day once it actually lands (the next due-check wouldn't fire again until the following calendar
-   day). Fixed by evaluating both sides of the comparison (`nfl_schedules.gameday` and the last
-   run's `finished_at`) in US Eastern time instead of the database's own timezone, matching
-   nflverse's own US-local slate-date convention - `StatsRefreshDueChecker.IS_DUE_SQL` now uses
-   `(now() at time zone 'America/New_York')::date`. Verified the corrected SQL runs cleanly
-   directly against Postgres and that the backend starts cleanly with no errors (this class has no
-   existing unit test - it's a thin SQL wrapper, more honestly verified live against real Postgres
-   than through a mocked JdbcTemplate that wouldn't catch a real SQL syntax issue anyway).
-4. **Not actionable yet, needs real elapsed season data**: revisit `targetShareAdjustment`'s
-   coefficients with a genuine out-of-sample backtest, and the team offense/defense split's
-   dedicated pass with proper out-of-sample validation (Priority 5) - both explicitly deferred
-   pending more completed *regular-season* games than exist right now (still preseason;
-   preseason games are already excluded from every backtest in this app). Re-running either
-   investigation today would just reproduce the exact same in-sample numbers already documented,
-   not add anything. Revisit once the season is underway.
-5. `offenseSnapPct` is stored (`import_snap_counts.R`) but deliberately unwired pending a
-   position-aware baseline - a workhorse RB and a rotational WR have very different "normal" snap
-   shares, so a single flat league-average comparison (the pattern used for WOPR/opponent
-   adjustments) would risk being actively wrong rather than just imprecise for this one.
+**Cleared as of 2026-08-28** - a long, productive session: player-prop coefficients, the team
+offense/defense split, and the totals blend weight were all recalibrated with a real temporal
+train/test split (the single biggest methodology upgrade to this app's whole calibration history -
+every prior calibration, including the same-day Elo constant check, was fit and evaluated on the
+same full dataset until today). WOPR/`targetShareAdjustment` was retried twice with two genuinely
+different regression methods and both agree it doesn't hold up - a settled negative result, not an
+open question. Style-matchup and pace-of-play were both investigated thoroughly and paused as real,
+converging nulls. See Recently Completed for the full numbers on all of it.
 
-Once this list is done or clearly exhausted, revisit Priority 1's paid-provider decision (research
-already done there) - as of 2026-08-20 this list IS exhausted, so that decision is next up front
-and center, not a someday item.
+**Cleared as of 2026-08-28 (continued)** - `rushingQualityAdjustment` retested (see Recently
+Completed) with a real, live data bug found and fixed along the way (PFR advanced rushing was only
+backfilled for 2025). The Elo constants, the recent/season blend weight, and now this term have all
+come back genuine, replicated nulls - every previously-flagged "worth retesting" candidate is now
+resolved. That's a meaningful checkpoint: the low-hanging recalibration fruit from this session's
+methodology upgrade looks exhausted, not just unexplored. Remaining open items:
+
+1. **`RECENT_GAME_WINDOW` (player-prop trailing window, currently 5 games)** - never tested against
+   alternatives at all, unlike the team side's `RECENT_GAMES_FOR_SCORING` (8 games, at least
+   in-sample-compared against 4/1 previously). A real, well-motivated, not-yet-touched candidate for
+   the same held-out methodology if more calibration work is wanted before moving on.
+2. **`StatsRefreshWorker` end-to-end dry run** - ten scripts now, added incrementally over many
+   sessions, never exercised as one real unit (only ever run individually via manual `Rscript`
+   calls). Season starts 2026-09-09 - worth a real check before it's live for real.
+3. Priority 6/8 UX and data-completeness backlog (last-X-game trend depth, defensive rank
+   calculations) - real, lower-urgency work whenever prediction-quality investigation runs dry.
+4. Secondary/fun (explicitly lower priority than the above, per 2026-08-28 user direction): a real
+   backtest-style comparison of the model's own predicted score against actual final scores.
+   `predictScore` already exists and runs live - this would be a new backtest endpoint/view, not new
+   prediction logic, so should be quick once picked up.
 
 ## Recently Completed
+
+- (2026-08-28, the actual latest) **PFR advanced rushing (`rushing_yards_after_contact`/
+  `rushing_yards_before_contact`/`rushing_broken_tackles`) was only backfilled for the 2025 season -
+  found while retesting `rushingQualityAdjustment` below, same "backfill gap, not a real
+  data-availability limit" pattern as several other bugs this session.**
+  `import_pfr_advanced_rushing.R` already supports any season and is already wired into
+  `StatsRefreshWorker`'s weekly chain (defaults to `most_recent_season()`), so nothing needed
+  backfilling was ever missing except the one-time historical run - it had simply never been run for
+  2018-2024. Ran it for all seven seasons; `player_game_stats.rushing_yards_after_contact` now has
+  real coverage matching `carries > 0` row counts for every season 2018-2025 (previously 0/12,275
+  rows before 2025, now 10,761/12,275 overall). No code change needed - the refresh chain already
+  covers this correctly going forward.
+
+- (2026-08-28) **`rushingQualityAdjustment`/`AFTER_CONTACT_QUALITY_COEFFICIENT` (0.35d) retested with
+  the raw-predictor method (same approach used for `SNAP_PCT_*`/WOPR), now backed by the real PFR
+  backfill above rather than 2025-only data.** Recovered the exact raw predictor by dividing the
+  exported `rushingQualityAdjustment` by the current coefficient (a single term, not a composite, so
+  this is lossless unlike a rescaled-composite regression), then fit `actual - blendedMean - otherAdj
+  ~ rawPredictor - 1` (no intercept, matching the term's actual shape in the live formula) on
+  `season <= cutoff`, evaluated held-out on `season > cutoff`, replicated across the same 6 cutoffs.
+  Result: **a real, replicated null.** The properly-fit coefficient is small and *negative* across
+  every cutoff (-0.05 to -0.11, opposite sign from the current +0.35), marginally significant on the
+  full dataset (p=0.020, coef=-0.067) but not reliably significant per-cutoff (p=0.08-0.40). More
+  importantly: even using this "correctly fit" coefficient loses to the current hand-picked +0.35 on
+  held-out MAE on every single one of the 6 cutoffs (current wins by 0.22-0.32 points every time,
+  n_test 4,287-10,618). Whatever this raw predictor is capturing, a plain linear OLS fit to it
+  doesn't generalize better than the existing guess - left untouched, same treatment as the Elo
+  constants and the blend-weight retest below. This closes out the last previously-flagged
+  recalibration candidate from this session - see the rotating list above for what's left.
+
+- (2026-08-28) **Player-prop recent/season blend weight (`PlayerPredictionService.buildProjection`'s
+  hard-coded `0.65d * recentAverage + 0.35d * seasonAverage`) re-tested per-metric with a real
+  temporal train/test split - retroactively closes out the 2026-08-20 in-sample-only finding that
+  flagged this as "real but not acted on" (e.g. receivingYards fitted ~42:58) without ever being
+  held-out validated.** Per metric, fit `blendTarget ~ recentAverage + seasonAverage` (OLS,
+  `blendTarget = actual` minus the other already-calibrated adjustment terms held fixed) on
+  `season <= cutoff`, evaluated held-out on `season > cutoff`, replicated across the same 6 cutoffs
+  (2018-2023). Result: **a real, replicated null - and it overturns the in-sample finding rather
+  than confirming it.** For 6 of 7 metrics (receivingYards, receptions, touchdowns, rushingYards,
+  passingYards, passingTouchdowns), the per-metric fitted blend loses to the current global
+  0.65/0.35 split on every single held-out cutoff (e.g. receivingYards: implied recent share
+  ~30-36% in every fit, but held-out MAE is *worse* by 0.79-1.29 points every time, not better).
+  Only `turnovers` "won" on all 6 cutoffs, but the effect is tiny (~0.03 points on an MAE around
+  0.78-0.80, ~3% relative) and the fitted recent-weight coefficient is unstable across cutoffs
+  (even goes negative on the 2018 cutoff, n_train=1160) - textbook small-sample noise on an
+  inherently low-signal metric, not trusted. Left untouched; the global 0.65/0.35 blend stays as-is.
+  Honest scope caveat: this held the other adjustment terms' coefficients fixed at their currently-
+  calibrated values while swapping only the blend - those coefficients were themselves fit assuming
+  the current blend, so a *joint* refit of blend + adjustments together could in principle differ.
+  Not pursued this pass (bigger lift, same "possible follow-up" treatment as other joint-refit ideas
+  in this file) given the clear, consistent, non-marginal held-out losses already found.
+
+- (2026-08-28) **Elo constants (`K_FACTOR`/`HOME_FIELD_ADVANTAGE_ELO`/`SEASON_REVERSION_FRACTION`
+  in `compute_team_strength_ratings.R`) re-tested through the now-live offense/defense-enriched
+  formula, not pure Elo alone** - the earlier same-day Elo-constant grid search (see below)
+  evaluated pure Elo before the offense/defense enrichment shipped, which is no longer what's
+  deployed; re-tested since the enrichment reweights how much Elo contributes (0.6427) and could in
+  principle have shifted the optimal underlying Elo replay. 150-combo grid (K in
+  {10,15,20,25,30,35}, HFA in {25,35,45,55,65}, reversion in {0.10,0.20,0.25,0.30,0.40}), selected
+  on train (season<2022), confirmed on held-out test (season>=2022, n=1184), offense/defense
+  coefficients held fixed at their shipped values. Result: **real null, and a stronger one than
+  before** - train accuracy across all 150 combos spans just 0.0161 (0.6367-0.6528), meaning the
+  enrichment has essentially absorbed whatever sensitivity to these hyperparameters used to exist.
+  The best combo (K=20, HFA=25, reversion=0.3) beat current (K=20, HFA=55, reversion=0.25) on
+  held-out accuracy (0.6495 vs 0.6402) but not MAE (9.929 vs 9.928, technically worse), and the
+  accuracy gain does not clear significance (McNemar p=0.1524, n=49 disagreements) - same
+  conclusion as the original standalone test, now reconfirmed with the enriched formula. Left
+  untouched. Current Elo constants stay as-is.
+
+- (2026-08-28) **Real, temporal train/test-split recalibration of the team
+  totals-prediction blend weight - a third real win in the same session, though with an honest
+  limit on how it could be verified live.** Same pattern as the day's other two wins: found a
+  hand-picked constant (`expectedTotalPoints`'s fixed 50/50 blend of a team's own recent scoring
+  vs. the opponent's recent points-allowed, with no intercept) that had never once been
+  regression-calibrated, and tested whether real data supports something different.
+  - **Method and result**: fit `actual_total ~ home_recent_scored + home_recent_allowed +
+    away_recent_scored + away_recent_allowed` (letting all four raw inputs have their own weight
+    plus a real intercept, instead of the fixed no-intercept 50/50 split), same 6-cutoff temporal
+    replication (2018-2023). Held-out MAE improved on every single cutoff (+0.45% to +1.50%), all
+    four coefficients real and statistically significant (p<0.03, most p<1e-9). Full-dataset fit
+    used for final values: intercept=20.9851, home-scored=0.4702, home-allowed=0.1335,
+    away-scored=0.3024, away-allowed=0.1741.
+  - **Honest, checked-not-assumed limitation of this particular fix**: does NOT solve the
+    totals-compression problem flagged 2026-08-20 (predicted range ~28-64 vs. real range 3-105,
+    which pace-of-play also failed to fix earlier the same session) - the refit's own held-out
+    predictions still only spanned ~37-54. A real, validated improvement to the existing formula's
+    accuracy, not a fix for its known structural range ceiling - documented as such in the code so
+    it isn't mistaken for one.
+  - **A real verification limit, found and reported honestly rather than glossed over**: checked
+    directly against Postgres - all 3,295 historical completed games already have a real posted
+    `nfl_schedules.total_line`, so `TeamMatchupBacktestService.runTotalsBacktest()` *always* prefers
+    the real line and structurally never touches the computed-estimate fallback this change lives
+    in - confirmed live (`GET /api/backtest/team-matchups/totals` reads exactly 10.4566 MAE, byte-
+    identical before and after, because the fallback path never fires on this dataset). This
+    recalibration can only ever matter for upcoming games without a posted line yet - checked live,
+    160 of the current 272 upcoming 2026 games (`GET /api/team-matchups/upcoming/all`) are in
+    exactly that situation right now, so this is a real, live-relevant change, not a dead branch -
+    just one whose accuracy claim rests on the R-side held-out validation alone, since the app's own
+    historical backtest endpoint can't independently confirm it. Sanity-checked the live output
+    directly: predicted totals across all 272 upcoming games ranged 38-54, matching the R-side
+    refit's own held-out range (37-54) almost exactly, and every sampled score looked like a real,
+    plausible NFL final (e.g. NE@SEA 18-26), not garbage output.
+  - New/updated tests: `TeamMatchupPredictionServiceTest`'s `expectedTotalPoints` test and
+    `TeamMatchupBacktestServiceTest`'s totals-fallback test both updated to the new formula's exact
+    hand-computed values (verified independently before editing, not copy-pasted from a failing
+    test's actual-output). Full suite: 88 tests passing.
+
+- (2026-08-28, latest of all) **Retried `targetShareAdjustment` (WOPR) with a cleaner regression
+  method - same conclusion as the earlier attempt the same day, now with much stronger evidence it
+  isn't a methodology artifact.** The first retry (rescaling the current already-scaled coefficient
+  by a train-fitted fraction, same method used successfully elsewhere the same day) failed - held
+  out MAE got consistently worse. Retried with the different method `SNAP_PCT_*` used successfully
+  (regress the RAW predictor directly - reconstructed by dividing the exported `targetShareAdjustment`
+  value back out by the current live coefficient - rather than rescaling an existing guess), same
+  6-cutoff replication discipline, fresh calibration export pulled after the day's other
+  coefficient changes landed (so the baseline being compared against was genuinely current, not
+  stale). **Same answer**: held-out MAE consistently *worse* on every single cutoff for both
+  `receivingYards` (-2.15% to -6.37%) and `receptions` (-0.09% to -2.36%), despite the fitted
+  coefficient being extremely "significant" by naive standards (p<1e-9 every time, n=27,382) and
+  the full-dataset fit landing at 39.2 for receivingYards - roughly 8.5x the current live value
+  (4.58), itself unstable across cutoffs (59.2 down to 40.4, never settling). Two independently
+  different regression methods agreeing this term doesn't generalize is real, converging evidence
+  the issue isn't *how* it's been calibrated - `targetShareAdjustment` stays at its current value.
+  Likely explanation, not fully investigated: WOPR is volume-correlated with `blendedMean`
+  (recentAverage/seasonAverage, already in the model) - a VIF check back on 2026-08-20 found this
+  wasn't a same-sample correlation-artifact problem (VIF ~1.15), but that doesn't rule out the
+  *incremental* WOPR effect being unstable across different seasons/eras in a way a single VIF
+  number can't catch. Worth a dedicated look if this term ever gets revisited, not a five-minute
+  fix. No code changed - a real, now well-tested negative result, documented so a future session
+  doesn't re-attempt the same thing a third time without a genuinely new angle.
+
+- (2026-08-28, even later still) **Priority 5's symmetric team offense/defense split, redone with
+  a real temporal train/test split - a second major win in the same session, live-confirmed across
+  three separate real metrics, and it corrected a mistake this session made a few hours earlier.**
+  User pushback: the claim that this specifically "needs 2026 season data" (written into WORKPLAN
+  the same session) was wrong - it had exactly the same gap the player-prop coefficients had that
+  morning (fit and evaluated on the same full 2014-2025 dataset back on 2026-08-20, never held
+  out), fixable immediately with data already stored.
+  - **Methodology**: rebuilt the Elo replay in R using the live production constants (K=20,
+    HFA=55, reversion=0.25 - unchanged from the same-day Elo-constant check, which is a separate
+    question from this offense/defense addition), tracking each team's real point-in-time trailing
+    scored/allowed as the replay walked forward chronologically. Same 6-cutoff replication
+    discipline as the player-prop work (2018-2023).
+  - **Real, consistently replicated result**: held-out margin MAE improved on every single one of
+    the 6 cutoffs tested (+0.07 to +0.13 points), and win-loss pick accuracy also improved on every
+    cutoff (+0.15pp to +1.26pp) - both metrics moving the same direction consistently is real
+    signal, not noise. A reduced model (dropping `awayRecentAllowed`, p=0.76 in the full fit -
+    contributing nothing) performed identically to the full one, so the simpler 4-term version
+    shipped. Full-dataset fit: `elo_predicted_margin` coefficient drops to 0.6427 (confirming the
+    2026-08-20 in-sample finding that this can't be a small additive nudge - the core Elo margin's
+    own weight genuinely needs rescaling, not just new terms added on top).
+  - **Honest caveat, checked properly, not glossed over**: a McNemar-style significance test on the
+    discrete win/loss pick specifically (2022 cutoff, 78 disagreements) came back p=0.57 - not
+    independently significant on its own. Win/loss accuracy is a much lower-power metric than
+    continuous margin error at this sample size (a few thousand team-games vs. tens of thousands of
+    player-game rows on the prop side), so this doesn't contradict the consistent MAE finding, but
+    it's a real limit on how confidently the *pick-accuracy* half specifically can be claimed from
+    the held-out test alone.
+  - **Shipped and verified live across three separate real metrics** (not just the held-out
+    replication numbers): `GET /api/backtest/team-matchups` winner accuracy 63.9%->64.67% (2131 of
+    3295 correct, up from 2104), margin MAE 10.4->10.24; `GET /api/backtest/team-matchups/spread`
+    hit rate 49.7%->51.12% (crossed from *below* a coin flip to above one); `GET
+    /api/backtest/team-matchups/totals` MAE unchanged (10.46, as expected - this change only
+    touches margin/win-probability, not the total-points calculation). All three metrics moving
+    the right direction together is real convergent evidence, on top of the held-out replication.
+  - **Implementation**: new `TeamMatchupPredictionService.predict(homeRating, awayRating,
+    Double homeRecentScored, Double homeRecentAllowed, Double awayRecentScored)` overload (real
+    coefficients: `OFFENSE_DEFENSE_INTERCEPT`=5.8815, `OFFENSE_DEFENSE_ELO_COEFFICIENT`=0.6427,
+    `OFFENSE_DEFENSE_HOME_SCORED_COEFFICIENT`=0.2283, `OFFENSE_DEFENSE_HOME_ALLOWED_COEFFICIENT`
+    =-0.1948, `OFFENSE_DEFENSE_AWAY_SCORED_COEFFICIENT`=-0.2695) - falls back to the original
+    pure-Elo 2-arg `predict()` when any of the three is null (a team's literal first game on
+    record), same graceful-degradation shape used everywhere else in this app. `homeWinProbability`
+    is derived from the same enriched margin (converted back through
+    `ELO_POINTS_PER_MARGIN_POINT`), not the raw rating difference - keeps the displayed confidence
+    and the actual pick internally consistent, the same bug class `UpcomingTeamMatchupService`'s
+    2026-08-20 fix already closed once for the margin/score pairing. Wired into
+    `UpcomingTeamMatchupService` (reusing the trailing averages it already computed for
+    `expectedTotalPoints`, no new data plumbing) and `TeamMatchupBacktestService.runBacktest()`/
+    `runSpreadBacktest()`. `runStyleCalibrationExport()` deliberately kept calling the pure-Elo
+    overload - that export's whole purpose is testing whether style interactions add anything
+    *beyond* Elo, so enriching its own baseline would undermine the comparison; documented in its
+    doc comment so this reads as a deliberate choice, not a missed call site.
+  - New tests: `TeamMatchupPredictionServiceTest` covers the enriched formula directly (exact
+    hand-computed values) and the null-fallback case; `TeamMatchupBacktestServiceTest` confirms
+    `runBacktest()` actually uses the enriched margin when real trailing history exists (asserts an
+    error value that could only come from the enriched formula, not the pure-Elo fallback - a
+    direct proof the wiring executed, not just that it compiles). Full suite: 88 tests passing.
+
+- (2026-08-28, latest) **Real, temporal train/test-split recalibration of four player-prop
+  coefficients - the biggest validated win of the session, live-confirmed, and it directly
+  disproved the "needs to wait for 2026 data" framing from earlier the same day.** User pushback:
+  proper out-of-sample validation means holding out data you already have, not waiting for new
+  data - correct, and a real gap, since every calibration this app has ever done (including this
+  same session's own Elo constant check) was fit and evaluated on the exact same full historical
+  dataset, never genuinely held out.
+  - **Methodology**: extended `PredictionBacktestService.CalibrationRow` with `season`/`gameDate`
+    (previously absent - no calibration data before today could even be split temporally). For
+    each candidate rescale: fit on `season <= cutoff`, evaluate held-out MAE on `season > cutoff`,
+    repeated across 6 independent cutoffs (2018-2023) before trusting any result - a single split
+    isn't enough (see the near-miss below for exactly why).
+  - **Real, replicated wins - held-out MAE improved on every single one of the 6 cutoffs tested,
+    not just one lucky split**: `passingYards` (+1.27% to +1.74%), `touchdowns` (+2.20% to
+    +4.10%, the largest), `passingTouchdowns` (+0.18% to +0.38%), `receivingYards` (+0.96% to
+    +1.81%, after correctly excluding the already-separately-validated `zoneCoverageRateDelta`
+    term from what got rescaled - see below). Final coefficients fit on the full 2014-2025 dataset
+    for maximum precision, now that the method itself was validated via replication.
+  - **A real near-miss, caught and avoided**: `targetShareAdjustment` (WOPR) looked highly
+    significant on a naive single-split regression (fraction≈9x, which would have undone the
+    2026-08-20 correction and drifted back toward the original problematic value) - but applying
+    it made held-out MAE *worse*, consistently, every time it was tested. Same tell that caught the
+    original 2026-08-20 miscalibration bug. Left completely untouched. `receptions`/`rushingYards`
+    showed no real signal either way (also untouched).
+  - **A real subtlety caught before shipping**: `receivingYards`'s `opponentAdjustment` composite
+    includes the recently-and-separately-validated `zoneCoverageRateDelta` term (2026-08-26 work,
+    p=0.019 on its own dedicated regression). Naively rescaling the whole composite would have
+    silently undone that validated work by compounding two independent corrections. Fixed by
+    reconstructing the composite minus the zone-coverage contribution before fitting, leaving
+    `ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT`/`ZONE_COVERAGE_RECEPTIONS_COEFFICIENT` completely
+    untouched - re-validated via the same 6-cutoff replication with this cleaner decomposition.
+  - **Coefficient changes** (`PlayerPredictionService`): `CPOE_PASSING_YARDS_COEFFICIENT` 3.0->0.0273,
+    `CPOE_PASSING_TOUCHDOWNS_COEFFICIENT` 0.02->0.0054, `RECEIVING_QUALITY_COEFFICIENT` 0.5->-0.0648
+    (a real sign flip, consistent across all 6 replications - a hot recent YAC-over-expectation
+    stretch predicts regression toward the mean, not more of the same), `PRESSURE_PASSING_YARDS_
+    COEFFICIENT` -2.0->-1.3408, `PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT` -0.02->-0.0235, new
+    `MISSED_TACKLE_RECEIVING_YARDS_COEFFICIENT`=24.32 (split out of the shared
+    `MISSED_TACKLE_YARDS_COEFFICIENT`=100.0, which stays unchanged for rushingYards - the two
+    metrics showed different real behavior), new named `PASSING_YARDS_OPPONENT_COEFFICIENT`=0.0469,
+    `TOUCHDOWNS_OPPONENT_COEFFICIENT`=0.0044, `RECEIVING_YARDS_OPPONENT_COEFFICIENT`=0.00365
+    (extracted from inline literals now that they're genuinely calibrated), wind/total-line
+    coefficients in `gameConditionsAdjustment` updated similarly, and the shared touchdown-metrics
+    total-line constant (previously one 0.03d value covering touchdowns/passingTouchdowns/
+    rushingTouchdowns) split into independent `TOUCHDOWNS_TOTAL_LINE_COEFFICIENT`=0.0045 and
+    `PASSING_TOUCHDOWNS_TOTAL_LINE_COEFFICIENT`=0.0213 once real evidence showed they wanted
+    meaningfully different magnitudes.
+  - **Verified live, before vs. after** (`GET /api/backtest/outcomes`): passingYards MAE 68.42 ->
+    67.18 (-1.8%), touchdowns MAE 0.3726 -> 0.3575 (-4.1%), passingTouchdowns MAE 0.9192 -> 0.9138
+    (-0.6%), receivingYards MAE 18.67 -> 18.41 (-1.4%) - receptions/rushingYards/turnovers
+    (deliberately untouched) confirmed byte-for-byte identical before and after, proving no
+    unintended side effects. 4 existing tests updated to the new expected values (recomputed by
+    hand from the new constants, not copy-pasted from the tool output); full suite: 85 tests
+    passing throughout.
+  - **Follow-up for future sessions**: this same methodology should be applied to the Elo constants
+    (today's earlier joint-grid/isolated-K_FACTOR check didn't clear significance, but wasn't
+    retested with this session's later, more careful zone-coverage-exclusion-style rigor) and to
+    any future player-prop coefficient work - `runCalibrationExport` now always carries
+    `season`/`gameDate`, so there's no reason to ever fit-and-evaluate on the same full dataset
+    again.
+
+- (2026-08-28, even later) **Investigated pace-of-play as a fix for the totals-compression
+  problem flagged 2026-08-20 - a real, converging null across two operationalizations, not built
+  into the app.** Explicit user direction after the style-matchup work concluded, on the reasoning
+  that raw play volume should plausibly drive scoring in a way the current points-scored/allowed
+  averaging formula doesn't directly capture.
+  - **Same-game check (the obvious first look)**: total offensive plays (both teams combined,
+    real counts from `nflreadr::load_participation()` row counts per team-game) vs. actual total
+    points, 855 real games 2023-2025 - correlation 0.43, R²=0.186. By a wide margin the strongest
+    single-variable relationship found anywhere this session (stronger than the real Vegas
+    `total_line`'s own ~0.09 R² ceiling documented 2026-08-12, stronger than anything from the
+    style-matchup work). Real total-play range (126-203) and real total-points range (3-90) both
+    show substantial variance, so this wasn't a degenerate/constant-value artifact either.
+  - **Point-in-time test (the one that matters)**: each team's own trailing (8-game, matching
+    `RECENT_GAMES_FOR_SCORING`) average offensive plays, summed for both sides, predicting the
+    actual total - controlling for the existing model's own predicted total (replicated exactly:
+    `((homeScored+awayAllowed)/2) + ((awayScored+homeAllowed)/2)`) so a real coefficient would mean
+    something genuinely incremental. **The strong same-game correlation completely collapsed**:
+    0.43 -> 0.041, R² 0.0017, p=0.234, n=839 - not remotely significant, and barely different from
+    zero. The same-game number was almost entirely picking up how *this specific game* unfolded
+    (blowouts run fewer plays as the leading team runs out the clock; close/back-and-forth games
+    run more), not a persistent team characteristic that predicts a *future* game - the same
+    reactive-confound pattern already flagged as a risk for `avgPassRushers`/`avgDefendersInBox`
+    on 2026-08-26, now confirmed directly for total play volume too.
+  - **One legitimate refinement tried, not a fishing expedition**: `no_huddle` rate (a real
+    coaching-philosophy/tempo choice, not just a game-script byproduct the way raw play count is) -
+    same trailing point-in-time test. Also a clean null: correlation 0.007, p=0.842, n=839.
+  - **Conclusion**: the totals-compression problem (predicted range 28-64 vs. real range 3-105,
+    documented 2026-08-20) stays genuinely open - pace-of-play doesn't close it, at least not via
+    simple trailing averages of either raw play volume or no-huddle rate. A real, useful negative
+    result closing out an open question rather than leaving it to be re-investigated blind next
+    time. Not built into the app - ad-hoc R investigation only, same "don't build infrastructure
+    for a hypothesis that didn't show real signal" discipline as the style-matchup work.
+  - Both of today's two free-data prediction-quality investigations (style-matchup and pace) came
+    back honest nulls - flagged in the rotating list above as a real signal that the easy free wins
+    in "add a new trailing-average signal" direction may be thinning out for now, worth weighing
+    against other available work rather than continuing to search blindly.
+
+- (2026-08-28, later) **Pushed the style-vs-style matchup question all the way to the play-level
+  EPA test the same day the coarse version landed - the sharper, more direct test the coarse
+  result explicitly couldn't rule out (see the entry below). Real, converging null result across
+  four independent tests, not built into the app (ad-hoc R only, per explicit user direction to
+  keep iterating and report back what's actually found).**
+  - **Confirmed the `load_pbp()`/`load_participation()` join works cleanly before building
+    anything on top of it** (the real technical risk this work was scoped around): joining on
+    `game_id`/`play_id` matched 100% of participation's 45,919 rows (2024) against real EPA/
+    success/yards_gained data, 92.8% of `pbp`'s own rows (the remainder are non-play rows -
+    kneels, spikes, timeouts - participation doesn't track).
+  - **Confirmed there's real signal to chase before investing in a full point-in-time pipeline**:
+    `epa ~ posteam * defense_man_zone_type` (interaction) vs. `epa ~ posteam + defense_man_zone_type`
+    (no interaction), fit against 109,932 real offensive plays (2023-2025) - the interaction is
+    statistically significant (ANOVA F=1.50, p=0.0067), meaning teams genuinely do differ in how
+    much coverage type affects their EPA, beyond both team quality and coverage type alone. Real,
+    not noise - this justified building the actual predictive test rather than stopping here.
+  - **The actual point-in-time predictive test (the one that matters)**: for every team-game
+    2023-2025 with enough trailing play history, computed the offense's own trailing EPA split by
+    coverage faced (zone vs. man, from real prior plays only) and the upcoming opponent's own
+    trailing zone-coverage rate (as the defense), then tested whether their interaction predicts
+    the offense's *actual* EPA in that specific game, controlling for the offense's own overall
+    trailing EPA and the opponent's aggregate zone tendency. **Null**: interaction p=0.410, R²
+    barely moved (0.0877->0.0881), n=1,613 real team-games.
+  - **Refined and re-tested rather than stopping at one null**: `defense_man_zone_type` is a
+    passing-coverage concept, so mixing in run plays (where box count matters more directly than
+    coverage) dilutes any real effect - rebuilt the same test scoped correctly to pass plays only
+    (67,480 real pass plays). **Still null, if anything weaker**: interaction p=0.653, n=1,613.
+  - **Tested a conceptually distinct mechanism too, not just variations on coverage**: the run-game
+    analog - offense's own trailing EPA split by box count faced (light box <7 defenders vs.
+    stacked box >=7, standard football convention) interacted with the opponent's own trailing
+    average box count, predicting actual rushing EPA. Found and excluded the same zero-as-sentinel
+    data quirk `import_participation_defense.R` already documented for `defenders_in_box` (0 means
+    "not applicable," not a real zero). **Also null**: interaction p=0.380, n=1,599 real team-games
+    (42,351 real run plays).
+  - **Honest conclusion, not a dead end left open indefinitely**: four independent, methodologically
+    distinct tests (coarse aggregate, play-level coverage split on all plays, the same test scoped
+    correctly to pass plays, and a genuinely different run-game/box-count mechanism) all return the
+    same answer - no significant style-interaction effect survives controlling for the
+    already-validated Elo/EPA baseline, even where real in-sample between-team variance does exist.
+    Explicitly did not run a fifth or sixth variation chasing a different p-value once this pattern
+    was clear - that would be exactly the "constructed after the fact, won't replicate" trap this
+    whole priority was scoped to avoid from the start. Recommended: pause this specific line of
+    investigation rather than keep iterating on the same 2023-2025 sample; revisit once real 2026
+    season data exists as a genuinely new angle, not more variations on what's already been tested.
+  - Deliberately not built into the app this pass (no new Java/Postgres infrastructure, no
+    `load_pbp()` ingestion pipeline) - ad-hoc R investigation only, consistent with "don't build
+    real infrastructure for a hypothesis until it's shown real signal," which it didn't.
+
+- (2026-08-28) **Built Priority 5's team offense data foundation and ran a real, disciplined test
+  of the style-vs-style matchup hypothesis - a genuine, thorough null result at the coarse
+  (team-game-aggregate) level, with a concrete next step (play-level EPA) scoped and carried
+  forward rather than the question being left open indefinitely.** Followed an explicit plan the
+  user approved before any code was written (same discipline as the participation-defense work).
+  - **New `TeamOffenseGameStat`/`team_offense_game_stats`** - the counterpart `TeamDefenseGameStat`
+    never had (closes Priority 3's long-open "build a cleaner team offense model" bullet). Two
+    clean, unambiguous style signals for this first pass (deliberately not parsing
+    `offense_personnel` groupings yet - real parsing risk, noted as a future refinement):
+    `passRate` (`nflreadr::load_team_stats()`, `attempts / (attempts + carries)`, backfilled
+    2018-2025 matching PFR advanced defense's own floor) and `shotgunRate`
+    (`nflreadr::load_participation()`, `offense_formation == "SHOTGUN"` share, grouped by
+    `possession_team` - the mirror image of how `import_participation_defense.R` derives
+    `defense_team` from the same column).
+  - **Found and fixed a real data-quality issue before it reached the regression**:
+    `offense_formation`'s taxonomy changed in 2023, confirmed live - 2018-2022 used a granular
+    scheme (EMPTY/I_FORM/JUMBO/PISTOL/SHOTGUN/SINGLEBACK/WILDCAT) where formations still snapped
+    from shotgun (EMPTY, SINGLEBACK) got their own separate labels instead of counting as
+    "SHOTGUN", while 2023+ collapsed everything to a clean PISTOL/SHOTGUN/UNDER CENTER scheme.
+    First backfill attempt produced a suspiciously flat ~53-55% shotgun rate for 2018-2022 that
+    jumped to 62-69% in 2023 - caught by a live plausibility check (real NFL shotgun rate has been
+    consistently higher than 53-55% for years, this wasn't a real trend), confirmed via the raw
+    formation-value distributions per season, not assumed. Fixed by gating `shotgunRate`
+    computation to `season >= 2023` in `import_team_offense.R` and nulling out the 2018-2022 values
+    already written, rather than leaving a wrong-but-present number sitting in the column - same
+    "an honest null beats a silently wrong value" discipline the injury-status/participation-defense
+    data-loss bugs already established this app follows.
+  - **New `TeamMatchupBacktestService#runStyleCalibrationExport()`** (`GET
+    /api/backtest/team-matchups/style-calibration`), same point-in-time-correct shape as
+    `PredictionBacktestService.runCalibrationExport()`: per backtestable game, the actual margin,
+    the already-validated Elo-predicted margin, and each side's own trailing (last 8 games,
+    matching `UpcomingTeamMatchupService.RECENT_GAMES_FOR_SCORING`) offense/defense style averages
+    - home offense vs. away defense, and the mirror set for away offense vs. home defense. 839 real
+    rows (2023-2025, where both offense and defense trailing data exist).
+  - **The real regression, six pre-specified interaction terms (not a grid search) - each a real
+    football hypothesis**: pass-heavy offense vs. zone-heavy defense, run-heavy offense vs.
+    stacked box, shotgun-heavy offense vs. high-pressure defense, tested both directions (home
+    offense x away defense, and the mirror). Fit `actual_margin ~ elo_predicted_margin + <all six
+    terms>` together (controlling for Elo and each other) and each term individually (checking
+    whether multicollinearity among the six was masking a real univariate effect) - **genuine null
+    result either way**: no term significant in the joint model (p=0.16-0.97), no term significant
+    tested alone either (p=0.10-0.86, closest was `home_rush_x_away_box` at p=0.097, still short of
+    the conventional 0.05 threshold), the joint F-test comparing the full model to Elo-alone wasn't
+    significant (F=0.91, p=0.487), and R²/MAE barely moved (R² 0.1486->0.1541; MAE 10.240->10.232).
+    This is a real, thorough negative result - not force-fit into the model, same treatment as
+    `avgPassRushers`/`avgDefendersInBox` and `team_implied_spread` got. Nothing wired into
+    `TeamMatchupPredictionService` this pass.
+  - **What this does and doesn't settle**: this coarse, team-game-aggregate-level test genuinely
+    doesn't find a broad "this offense style generally struggles against that defense style"
+    effect once Elo is already controlled for. It does NOT rule out the sharper, more direct
+    version of the user's original question (team A specifically vs. team C's specific tendencies,
+    at play-level granularity) - that needs joining `nflreadr::load_pbp()`'s EPA/success-rate data
+    to `load_participation()`'s per-play coverage/pressure/box data, a bigger, separate lift not
+    attempted this session (explicitly scoped as a next step in the approved plan, not silently
+    dropped) - see "Priorities From Last Session" above and Priority 5's "Implementation ideas".
+  - New tests: `TeamMatchupBacktestServiceTest` covers the export directly (trailing-average
+    computation for both sides, and the "no history yet -> skipped" case) - 9 tests in that file
+    now, up from 7. Full suite: 85 tests passing.
+  - Also found, mid-session, that the Postgres container had been removed (not just stopped) since
+    the prior session - `docker compose ps` returned no containers at all, though `docker info`
+    confirmed the daemon itself was running. Confirmed the named `postgres_data` volume was still
+    intact before recreating the container (`docker compose up -d postgres`) - verified all data
+    survived (106,560 `player_game_stats` rows, matching the known count), consistent with the
+    2026-08-20 finding that container recreation doesn't touch the named volume.
+
+- (2026-08-26, even later) **Built the real, point-in-time-correct version of the participation
+  (coverage-scheme/pass-rush) feature investigated earlier the same day - one new real
+  `opponentAdjustment` signal shipped, two real candidates tested and correctly left out.**
+  Followed the exact Phase 4 sequence (schema + ETL first, then a real regression against the
+  harness that already exists, wire in only what survives) per an explicit plan the user approved
+  before any code was written.
+  - **New `etl/r/import_participation_defense.R`**, mirroring `import_pfr_defense_advanced.R`'s
+    shape (UPDATE against existing `team_defense_game_stats` rows, `etl_import_runs` bookkeeping),
+    with one real difference: `load_participation()` is per-play with only the *offense's* team
+    labeled, so the script derives the defending team via a join to `nfl_schedules`
+    `home_team`/`away_team` before aggregating. Backfilled 2023-2025 (1,710 team-games - the only
+    seasons this source is reliably populated, confirmed earlier the same day).
+  - **Found and fixed a real data-quality bug while backfilling, before it ever reached a
+    regression**: `number_of_pass_rushers` and `defenders_in_box` both use `0` as a "not
+    applicable to this play" sentinel (e.g. a run play has no pass-rush count), not a genuine
+    zero - confirmed directly (23,754 of 45,919 2024 plays are exactly `0` for pass rushers; 9,214
+    of those 9,219 zero-box rows are also zero-rushers rows, consistent with "not tracked for this
+    play type"). Naively averaging them in produced implausible league-wide numbers (2.08 pass
+    rushers/play, 4.87 defenders in box) caught by a live plausibility spot-check against real NFL
+    baselines; excluding the sentinel zeros before averaging fixed both to realistic figures (4.31
+    pass rushers, 6.20 defenders in box). `zoneCoverageRate` didn't have this problem - it's a real
+    category, not a count, so no zero-sentinel issue applied.
+  - **New `TeamDefenseGameStat` columns** (`zoneCoverageRate`, `avgPassRushers`,
+    `avgDefendersInBox`) and three matching trailing-delta helpers on `PlayerPredictionService`
+    (`zoneCoverageRateDelta`/`avgPassRushersDelta`/`avgDefendersInBoxDelta`, refactored alongside
+    `missedTackleDelta` onto one shared `averageDoubleDelta` helper - real reuse, not just new
+    code). `LeagueDefenseAverages`/`leagueDefenseAveragesFrom` extended with three more real
+    computed fallback averages (queried directly against the full 2023-2025 backfill: 0.2885 zone
+    rate, 4.3117 pass rushers, 6.2013 defenders in box - not guesses, same discipline as every
+    other fallback in this file).
+  - **The real regression, run against `PredictionBacktestService`'s existing point-in-time
+    harness** (extended `CalibrationRow`/`runCalibrationExport` with the three raw trailing deltas
+    - not pre-scaled by any coefficient, since none existed yet, same "regress the raw predictor"
+    treatment `WOPR_*`/`SNAP_PCT_*` got): fit `actual ~ recentAverage + seasonAverage +
+    opponentAdjustment + conditionsAdjustment + rushingQualityAdjustment + advancedMetricAdjustment
+    + targetShareAdjustment + <new delta>` per metric - critically, `opponentAdjustment` here
+    already includes the existing pressures/missedTacklePct signals, so a significant coefficient
+    on a new term is real evidence of something incremental, not a restatement of what's already
+    wired. **Real result, and it split the three candidates apart cleanly**: `zoneCoverageRateDelta`
+    held up for `receivingYards` (coefficient 8.4465, p=0.019, n=14,473) and `receptions`
+    (coefficient 1.2441, p=2.94e-06, n=14,473) - both real, both football-sane (more zone coverage
+    than league average associates with more underneath completions/yards allowed, consistent with
+    zone's known tendency to concede shorter, higher-percentage throws). `avgPassRushersDelta`
+    (tested against passingYards/passingTouchdowns) and `avgDefendersInBoxDelta` (tested against
+    rushingYards) did NOT hold up (p=0.10-0.97) - and `avgDefendersInBoxDelta`'s sign flipped
+    negative once measured correctly (more box defenders -> fewer rushing yards, the intuitive
+    direction), confirming last session's same-game positive correlation was exactly the
+    reactive-coaching confound flagged as a risk at the time, not a real predictive signal. Both
+    left unwired, stored, and documented as real checked negative results - not force-fit in.
+  - **Wired `zoneCoverageRateDelta` into `advancedDefenseAdjustment`** (folded in there, not a new
+    top-level field - same reasoning Phase 4 used) for `receivingYards` (alongside the existing
+    missed-tackle nudge) and `receptions` (a brand new case in that switch - receptions had never
+    had an advanced-defense nudge before). New test
+    (`opponentAdjustmentAddsZoneCoverageNudgeForReceivingMetrics`) plus direct unit coverage for
+    all three new delta methods (`PlayerPredictionServiceTest`, 25 tests in that file now, up from
+    20) - `pressureDelta`/`missedTackleDelta` had never had direct tests either before this pass,
+    only indirect coverage through `opponentAdjustment`, so this is the first direct test coverage
+    for that whole method family.
+  - **Verified live, before vs. after** (`GET /api/backtest/outcomes`, same clean comparison every
+    prior calibration entry uses): receivingYards MAE 18.68 -> 18.6677, receptions MAE 1.371 ->
+    1.3701 - both genuinely, if modestly, improved, exactly the size of movement you'd expect from
+    a real-but-secondary signal added on top of an already-calibrated model (not a dramatic swing,
+    which would have been the more suspicious outcome - same read this file has given every prior
+    calibration pass). `passingYards`/`rushingYards`/`touchdowns`/etc. MAE unchanged, as expected
+    (zoneCoverageRateDelta only touches receivingYards/receptions). Full suite: 83 tests passing.
+  - Added `import_participation_defense.R` to `StatsRefreshWorker`'s chain (now nine scripts),
+    right after `import_pfr_defense_advanced.R` for the same "only UPDATEs rows
+    `import_team_defense.R` already wrote" reason that script runs where it does.
+
+- (2026-08-26, later) **Shipped Priority 6's position-grouped summary cards, fixed a stale/false
+  FAQ answer, and closed the long-standing "never visually verified in a browser" gap - all in one
+  session, per explicit user direction to work through free UX/data items rather than revisit
+  Priority 1's paid-data decision yet.**
+  - **Position-grouped summary cards** (`PlayerDetailPage`'s "Player snapshot" section,
+    `App.jsx`): the top 3-4 hero cards were previously one generic QB-vs-everyone-else split
+    (combined yards/TDs/turnovers). Replaced with real position-specific groups - QB (passing
+    yards/g, passing TDs/g, rushing yards/g, turnovers/g), RB (rushing yards/g with carries/g
+    context, rushing TDs/g, receiving yards/g with targets/receptions context, turnovers/g),
+    WR/TE/FB (targets/g, receptions/g with catch rate, receiving yards/g, receiving TDs/g), with
+    the old generic 3-card layout kept as the fallback for an unrecognized position - same grouping
+    `PlayerPredictionService.SKILL_POSITIONS` already uses backend-side, for consistency. Genuinely
+    free: every field (`carriesPerGame`, `receivingTargetsPerGame`, `receptionsPerGame`, etc.) was
+    already computed and returned by `PlayerStatInsightSummary` - this was a pure frontend reshuffle,
+    no backend change. Visually verified against three real players (see below).
+  - **Fixed a stale, actively false FAQ answer**: "What's not factored in yet?" still listed snap
+    counts, injury status, and weather as unmodeled - all three (plus target share and opponent
+    pass-rush/missed-tackle data) have actually been live in the model since earlier sessions this
+    FAQ entry was never updated to reflect. Rewrote it to name the real remaining gap (betting-market
+    lines - Priority 1) and correctly list what's actually wired in, including the honest caveat that
+    snap share is tracked but deliberately not applied live. Also refreshed "How is the projected
+    stat line calculated?" to mention the opponent/weather/role/injury nudges that have been added
+    since that answer was first written, not just the original recent/season blend.
+  - **Closed the "no browser tool available" gap flagged across multiple prior sessions (2026-08-19,
+    2026-08-20, 2026-08-26 earlier today)**: `playwright` installs in seconds via `npm install` in a
+    throwaway scratch directory, and a Chromium binary was already cached on this machine
+    (`AppData/Local/ms-playwright`) from some earlier, unrelated setup - no slow/heavy download was
+    needed. Wrote a standalone script (not committed - lives in the session scratchpad) that starts
+    the real dev stack (`start-dev.ps1`), drives the real UI (search -> open player -> wait for the
+    prediction/insight sections -> screenshot), and checks for console/page errors. **Verified live,
+    with real data**: Patrick Mahomes (QB - shows the real live "Questionable" injury-status pill),
+    Christian McCaffrey (RB), and Tyreek Hill (WR) all render their new position-grouped cards
+    correctly with sane real numbers; the FAQ page's updated text reads cleanly; `/matchups` (flagged
+    unverified since 2026-08-19) also confirmed rendering correctly for the first time - real
+    per-game scores, correct winner bolding, and the `predictedTie` case (two 2026-08-20 additions
+    that had never actually been seen rendered) both showing correctly. Zero console/page errors
+    across all five pages checked. Backend/frontend dev processes were stopped again afterward;
+    Postgres was left running as it already was (not touched by this verification pass).
+- (2026-08-26) **Fixed a real compile error left over from an undocumented 2026-08-22 session** -
+  the machine this project runs on was restarted mid-edit while wiring `offenseSnapPct` into a new
+  `usageAdjustment` term (the item flagged 2026-08-20). The `usageAdjustment(...)` method itself was
+  fully written and tested (3 passing tests), but `buildProjection` referenced its return value as a
+  bare local variable that was never actually assigned - a genuine `cannot find symbol` compile
+  error, confirmed via a clean `mvnw compile` (not caught earlier since a stale `target/` let
+  incremental builds report success without recompiling the changed file). That 08-22 session's work
+  was also never written back to WORKPLAN.md, which is how this went unnoticed rather than being
+  caught by the "read WORKPLAN first" habit. Fixed with the one missing line, computing the value and
+  surfacing it on the response without folding it into `projectedMean` - matching the surrounding
+  comment, which documents a live A/B test already found no net accuracy improvement from summing it
+  in (rushingYards MAE +0.0095, receivingYards MAE +0.022). Verified clean: backend compiles, all 78
+  tests pass, frontend builds with no errors. Everything since the last commit (2026-08-11/12,
+  covering NGS/PFR-defense/injury-status/coefficient-calibration/team-matchups) was also still
+  sitting uncommitted at this point - now pushed to `main`.
 
 - (2026-08-20, later) **Knocked out the two remaining free-data items: the UX pill gap and the
   `targetShareAdjustment` recalibration follow-up - the latter shipped a real, self-caught
@@ -1160,8 +1665,13 @@ Desired behavior:
 - Add missing stat ingestion that materially improves prediction quality: snap counts, drops,
   target share trends (not just topline box-score totals).
 - Build a cleaner team offense model to pair with the defensive data already being collected.
-- Expand matchup features so predictions account for the opponent more realistically (coverage
-  tendencies, pace of play, not just aggregate yards/points allowed).
+- ~~Expand matchup features so predictions account for the opponent more realistically (coverage
+  tendencies, pace of play, not just aggregate yards/points allowed)~~ **Coverage tendencies done
+  (2026-08-26)** - `zoneCoverageRate` (nflreadr::load_participation()) is a real, trailing-average-
+  calibrated `opponentAdjustment` signal now (receivingYards/receptions) - see Recently Completed.
+  Pass-rush-frequency and defenders-in-box were tested the same rigorous way and did not hold up as
+  real trailing predictors (real checked negative results, not wired in). Pace of play (plays/game,
+  seconds/play - also available via nflverse `load_pbp()`) is not yet investigated.
 - ~~Add weather and Vegas-derived features~~ **Done (2026-08-12)** - see Recently Completed.
   `gameConditionsAdjustment` covers wind (live-forecast-aware for upcoming games, real historical
   values for backtesting) and the Vegas game total; `team_implied_spread` is stored/backtestable
@@ -1280,6 +1790,43 @@ Implementation ideas:
 - ~~Decide whether a team offense model would meaningfully improve prediction quality~~
   **Investigated (2026-08-20)** - real but modest effect found, not built this pass. See Recently
   Completed.
+- **Style-vs-style matchup awareness (2026-08-26, explicit user direction).** The 2026-08-20
+  investigation above tested a *symmetric* idea: does adding "how good is this team on offense/
+  defense overall" to the Elo margin help - found a real but small effect, correctly declined to
+  force it in. This is a genuinely different, *asymmetric* question: can team A be a bad matchup
+  for team C specifically - man coverage vulnerable to exactly the routes C's offense runs, a
+  light box exploitable by exactly the run scheme C uses - independent of A and C's overall
+  quality, such that A struggles against C while beating B, and B in turn beats C? Elo is
+  transitive by construction (a single strength number per team can't represent "A but weak
+  specifically against C-style offenses"), so this needs its own interaction term, not a small
+  nudge on the existing margin.
+  - ~~A team offense equivalent of TeamDefenseGameStat doesn't exist yet~~ **Done (2026-08-28)** -
+    new `TeamOffenseGameStat`/`import_team_offense.R` (`passRate` 2018-2025, `shotgunRate`
+    2023-2025 only after a real taxonomy-change bug was found and fixed - see Recently Completed).
+  - ~~Test a concrete, pre-specified style-interaction hypothesis~~ **Done (2026-08-28) - a real,
+    thorough null result at the coarse (team-game-aggregate) level.** Six pre-specified interaction
+    terms (pass-heavy offense x zone-heavy defense, run-heavy offense x stacked box, shotgun-heavy
+    offense x high-pressure defense, both directions), tested jointly and individually against the
+    already-validated 63.9%-accuracy Elo baseline - none significant either way (joint model
+    p=0.16-0.97; individually p=0.10-0.86; joint F-test p=0.487; R²/MAE barely moved). Nothing
+    wired in - see Recently Completed for the full numbers. This is a real, useful negative result
+    (matches the 2026-08-20 symmetric-split investigation's own honest conclusion), not a dead end:
+    see the next bullet for what it doesn't settle.
+  - ~~The play-level EPA version~~ **Done (2026-08-28, later) - real, converging null across four
+    tests, not built into the app.** `load_pbp()`/`load_participation()` join confirmed clean first
+    (100% of participation's rows matched real EPA data on `game_id`/`play_id`), and a real
+    in-sample interaction between team identity and coverage-faced was confirmed to exist
+    (ANOVA p=0.0067) before investing in the full point-in-time test - so this wasn't skipped or
+    under-tried. The actual predictive test (offense's own trailing EPA-by-coverage split x
+    opponent's trailing zone rate, predicting real game EPA, controlling for aggregate EPA/zone
+    tendency): null (p=0.410, n=1,613). Refined to pass-plays-only (the football-correct scope for
+    a coverage concept): still null, weaker (p=0.653). A genuinely distinct run-game/box-count
+    version: also null (p=0.380, n=1,599). See Recently Completed for the full numbers. **Paused,
+    not abandoned or left ambiguous** - four independent, honest nulls across real operationalizations
+    of the same idea is real evidence this specific approach (simple trailing-average interactions,
+    2023-2025 sample) doesn't surface a usable signal; running more variations chasing significance
+    would be the exact overfitting trap this priority was scoped to avoid. Revisit once real 2026
+    in-season data exists as a genuinely new angle - not as a default next-session task.
 - Consider whether the hand-picked constants (`K_FACTOR = 20`, `HOME_FIELD_ADVANTAGE_ELO = 55`,
   `ELO_POINTS_PER_MARGIN_POINT = 25`, and - new as of 2026-08-20 -
   `RECENT_GAMES_FOR_SCORING = 8` for the predicted-total calculation) hold up under real
@@ -1376,8 +1923,8 @@ Implementation ideas:
 
 - Weekly and season-level defensive rank calculations.
 - Team logos on player pages.
-- Investigate whether defensive scheme (man/zone rate, etc.) is available anywhere reliable -
-  would also serve Priority 3's feature-completeness goal.
+- ~~Investigate whether defensive scheme (man/zone rate, etc.) is available anywhere reliable~~
+  **Done (2026-08-26)** - see Priority 3 and Recently Completed.
 
 ## Priority 9: Search, Candidate Matching, and Performance Maintenance
 

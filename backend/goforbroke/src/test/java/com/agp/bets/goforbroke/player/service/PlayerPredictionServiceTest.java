@@ -163,19 +163,21 @@ class PlayerPredictionServiceTest {
   void advancedMetricAdjustmentScalesPassingYardsAndTouchdownsByRecentCpoe() {
     List<PlayerGameStat> recentStats = List.of(cpoeGame(4.0), cpoeGame(2.0));
 
-    // Average CPOE is 3.0 -> passingYards: 3.0 * 3.0 = 9.0; passingTouchdowns: 3.0 * 0.02 = 0.06.
-    assertEquals(9.0d, service.advancedMetricAdjustment("passingYards", recentStats), 0.0001d);
-    assertEquals(0.06d, service.advancedMetricAdjustment("passingTouchdowns", recentStats), 0.0001d);
+    // Average CPOE is 3.0 -> passingYards: 3.0 * 0.0273 = 0.0819; passingTouchdowns: 3.0 * 0.0054 = 0.0162
+    // (2026-08-28 real-calibrated train/test values - see CPOE_PASSING_YARDS_COEFFICIENT's doc).
+    assertEquals(0.0819d, service.advancedMetricAdjustment("passingYards", recentStats), 0.0001d);
+    assertEquals(0.0162d, service.advancedMetricAdjustment("passingTouchdowns", recentStats), 0.0001d);
     assertEquals(0.0d, service.advancedMetricAdjustment("rushingYards", recentStats), 0.0001d);
   }
 
   @Test
   void advancedMetricAdjustmentScalesReceivingYardsByRecentYacAboveExpectationAndVolume() {
     // 1.0 YAC-over-expectation/catch across 5 catches/game, both games -> playerRate 1.0,
-    // averageReceptions 5.0 -> 1.0 * 5.0 * 0.5 = 2.5.
+    // averageReceptions 5.0 -> 1.0 * 5.0 * -0.0648 = -0.324 (2026-08-28: real train/test
+    // calibration found a consistent sign flip - see RECEIVING_QUALITY_COEFFICIENT's doc).
     List<PlayerGameStat> recentStats = List.of(yacGame(5, 1.0), yacGame(5, 1.0));
 
-    assertEquals(2.5d, service.advancedMetricAdjustment("receivingYards", recentStats), 0.0001d);
+    assertEquals(-0.324d, service.advancedMetricAdjustment("receivingYards", recentStats), 0.0001d);
     assertEquals(0.0d, service.advancedMetricAdjustment("passingYards", recentStats), 0.0001d);
   }
 
@@ -276,13 +278,15 @@ class PlayerPredictionServiceTest {
   void opponentAdjustmentAddsPressureNudgeForPassingMetrics() {
     List<TeamDefenseGameStat> defenseHistory = List.of(defenseGameWithPressures(12), defenseGameWithPressures(12));
     PlayerPredictionService.LeagueDefenseAverages leagueAverages =
-        new PlayerPredictionService.LeagueDefenseAverages(225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d);
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
 
-    // pressureDelta = 12 - 8.5 = 3.5; passingYards: 3.5 * -2.0 = -7.0 (base yardage-allowed term
-    // is 0 since passingYardsAllowed isn't set on these stats).
-    assertEquals(-7.0d, service.opponentAdjustment("passingYards", defenseHistory, leagueAverages), 0.0001d);
-    // passingTouchdowns: 3.5 * -0.02 = -0.07.
-    assertEquals(-0.07d, service.opponentAdjustment("passingTouchdowns", defenseHistory, leagueAverages), 0.0001d);
+    // pressureDelta = 12 - 8.5 = 3.5; passingYards: 3.5 * -1.3408 = -4.6928 (base yardage-allowed
+    // term is 0 since passingYardsAllowed isn't set on these stats). 2026-08-28: real-calibrated
+    // train/test value, was -2.0 - see PRESSURE_PASSING_YARDS_COEFFICIENT's doc.
+    assertEquals(-4.6928d, service.opponentAdjustment("passingYards", defenseHistory, leagueAverages), 0.0001d);
+    // passingTouchdowns: 3.5 * -0.0235 = -0.08225 (was -0.02 - see PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT's doc).
+    assertEquals(-0.08225d, service.opponentAdjustment("passingTouchdowns", defenseHistory, leagueAverages), 0.0001d);
   }
 
   @Test
@@ -290,12 +294,33 @@ class PlayerPredictionServiceTest {
     List<TeamDefenseGameStat> defenseHistory =
         List.of(defenseGameWithMissedTacklePct(0.15d), defenseGameWithMissedTacklePct(0.15d));
     PlayerPredictionService.LeagueDefenseAverages leagueAverages =
-        new PlayerPredictionService.LeagueDefenseAverages(225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d);
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
 
-    // missedTackleDelta = 0.15 - 0.09 = 0.06; rushingYards/receivingYards: 0.06 * 100.0 = 6.0
-    // (base yardage-allowed term is 0 since rushing/receivingYardsAllowed aren't set here).
+    // missedTackleDelta = 0.15 - 0.09 = 0.06; rushingYards: 0.06 * 100.0 = 6.0 (no real train/test
+    // signal 2026-08-28, unchanged). receivingYards: 0.06 * 24.32 = 1.4592 (real-calibrated
+    // 2026-08-28, was sharing the same 100.0 coefficient - see
+    // MISSED_TACKLE_RECEIVING_YARDS_COEFFICIENT's doc). Both: base yardage-allowed term is 0 since
+    // rushing/receivingYardsAllowed aren't set here.
     assertEquals(6.0d, service.opponentAdjustment("rushingYards", defenseHistory, leagueAverages), 0.0001d);
-    assertEquals(6.0d, service.opponentAdjustment("receivingYards", defenseHistory, leagueAverages), 0.0001d);
+    assertEquals(1.4592d, service.opponentAdjustment("receivingYards", defenseHistory, leagueAverages), 0.0001d);
+  }
+
+  @Test
+  void opponentAdjustmentAddsZoneCoverageNudgeForReceivingMetrics() {
+    List<TeamDefenseGameStat> defenseHistory =
+        List.of(defenseGameWithZoneCoverageRate(0.7d), defenseGameWithZoneCoverageRate(0.7d));
+    PlayerPredictionService.LeagueDefenseAverages leagueAverages =
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
+
+    // zoneCoverageRateDelta = 0.7 - 0.53 = 0.17; receivingYards: 0.17 * 8.4465 = 1.435905
+    // (missedTackleDelta contributes 0 since missedTacklePct isn't set on these stats);
+    // receptions: 0.17 * 1.2441 = 0.211497. rushingYards/passingYards are untouched by this
+    // signal (real-calibrated - see ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT's doc).
+    assertEquals(1.435905d, service.opponentAdjustment("receivingYards", defenseHistory, leagueAverages), 0.0001d);
+    assertEquals(0.211497d, service.opponentAdjustment("receptions", defenseHistory, leagueAverages), 0.0001d);
+    assertEquals(0.0d, service.opponentAdjustment("rushingYards", defenseHistory, leagueAverages), 0.0001d);
   }
 
   private TeamDefenseGameStat defenseGameWithPressures(int pressures) {
@@ -307,6 +332,73 @@ class PlayerPredictionServiceTest {
   private TeamDefenseGameStat defenseGameWithMissedTacklePct(double missedTacklePct) {
     TeamDefenseGameStat stat = new TeamDefenseGameStat();
     stat.setMissedTacklePct(missedTacklePct);
+    return stat;
+  }
+
+  // Not yet wired into opponentAdjustment/advancedDefenseAdjustment (see those methods' docs), so
+  // these three are tested directly rather than through opponentAdjustment the way
+  // pressureDelta/missedTackleDelta are above.
+  @Test
+  void zoneCoverageRateDeltaComparesTrailingAverageAgainstLeagueBaseline() {
+    List<TeamDefenseGameStat> defenseHistory =
+        List.of(defenseGameWithZoneCoverageRate(0.7d), defenseGameWithZoneCoverageRate(0.7d));
+    PlayerPredictionService.LeagueDefenseAverages leagueAverages =
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
+
+    assertEquals(
+        0.17d, service.zoneCoverageRateDelta(defenseHistory, leagueAverages), 0.0001d);
+  }
+
+  @Test
+  void avgPassRushersDeltaComparesTrailingAverageAgainstLeagueBaseline() {
+    List<TeamDefenseGameStat> defenseHistory =
+        List.of(defenseGameWithAvgPassRushers(5.2d), defenseGameWithAvgPassRushers(5.2d));
+    PlayerPredictionService.LeagueDefenseAverages leagueAverages =
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
+
+    assertEquals(1.0d, service.avgPassRushersDelta(defenseHistory, leagueAverages), 0.0001d);
+  }
+
+  @Test
+  void avgDefendersInBoxDeltaComparesTrailingAverageAgainstLeagueBaseline() {
+    List<TeamDefenseGameStat> defenseHistory =
+        List.of(defenseGameWithAvgDefendersInBox(7.5d), defenseGameWithAvgDefendersInBox(7.5d));
+    PlayerPredictionService.LeagueDefenseAverages leagueAverages =
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
+
+    assertEquals(1.0d, service.avgDefendersInBoxDelta(defenseHistory, leagueAverages), 0.0001d);
+  }
+
+  @Test
+  void participationDeltasAreZeroWhenNoDataStoredYet() {
+    List<TeamDefenseGameStat> defenseHistory = List.of(new TeamDefenseGameStat());
+    PlayerPredictionService.LeagueDefenseAverages leagueAverages =
+        new PlayerPredictionService.LeagueDefenseAverages(
+            225.0d, 110.0d, 125.0d, 21.0d, 8.5d, 0.09d, 0.53d, 4.2d, 6.5d);
+
+    assertEquals(0.0d, service.zoneCoverageRateDelta(defenseHistory, leagueAverages), 0.0001d);
+    assertEquals(0.0d, service.avgPassRushersDelta(defenseHistory, leagueAverages), 0.0001d);
+    assertEquals(0.0d, service.avgDefendersInBoxDelta(defenseHistory, leagueAverages), 0.0001d);
+  }
+
+  private TeamDefenseGameStat defenseGameWithZoneCoverageRate(double zoneCoverageRate) {
+    TeamDefenseGameStat stat = new TeamDefenseGameStat();
+    stat.setZoneCoverageRate(zoneCoverageRate);
+    return stat;
+  }
+
+  private TeamDefenseGameStat defenseGameWithAvgPassRushers(double avgPassRushers) {
+    TeamDefenseGameStat stat = new TeamDefenseGameStat();
+    stat.setAvgPassRushers(avgPassRushers);
+    return stat;
+  }
+
+  private TeamDefenseGameStat defenseGameWithAvgDefendersInBox(double avgDefendersInBox) {
+    TeamDefenseGameStat stat = new TeamDefenseGameStat();
+    stat.setAvgDefendersInBox(avgDefendersInBox);
     return stat;
   }
 

@@ -36,12 +36,38 @@ class TeamMatchupPredictionServiceTest {
   }
 
   @Test
+  void predictWithRecentScoringUsesTheRealCalibratedOffenseDefenseFormula() {
+    // ratingDiff = 1600 - 1500 + 55 = 155; eloPredictedMargin = 155 / 25 = 6.2. predictedMargin =
+    // 5.8815 + 0.6427*6.2 + 0.2283*24.0 - 0.1948*18.0 - 0.2695*20.0 = 6.44904 (2026-08-28
+    // real-calibrated coefficients - see OFFENSE_DEFENSE_INTERCEPT's doc).
+    TeamMatchupPredictionService.MatchupPrediction prediction =
+        service.predict(1600.0d, 1500.0d, 24.0d, 18.0d, 20.0d);
+
+    assertEquals(6.44904d, prediction.predictedMargin(), 0.0001d);
+    // homeWinProbability is derived from this same enriched margin (converted back through
+    // ELO_POINTS_PER_MARGIN_POINT), not the raw pre-regression rating difference.
+    assertEquals(0.716688d, prediction.homeWinProbability(), 0.0001d);
+  }
+
+  @Test
+  void predictFallsBackToPureEloWhenAnyRecentScoringValueIsMissing() {
+    // Same ratings as equalRatingsFavorHomeTeamByHomeFieldAdvantageOnly - only one of the three
+    // recent-scoring values is null (a team's first game on record, in practice), which should
+    // fall back to the pure-Elo formula rather than guessing at the missing inputs.
+    TeamMatchupPredictionService.MatchupPrediction prediction =
+        service.predict(1500.0d, 1500.0d, null, 20.0d, 20.0d);
+
+    assertEquals(2.2d, prediction.predictedMargin(), 0.0001d);
+  }
+
+  @Test
   void expectedTotalPointsBlendsEachTeamsOwnRecentOffenseAgainstTheOpponentsRecentDefense() {
     // Home averages 27 scored/17 allowed recently; away averages 20 scored/24 allowed.
-    // expectedHomeScore = (27 + 24) / 2 = 25.5; expectedAwayScore = (20 + 17) / 2 = 18.5.
+    // 2026-08-28 real-calibrated formula (see TOTAL_POINTS_INTERCEPT's doc): 20.9851 + 0.4702*27 +
+    // 0.1335*17 + 0.3024*20 + 0.1741*24 = 46.1764.
     double total = service.expectedTotalPoints(27.0d, 17.0d, 20.0d, 24.0d);
 
-    assertEquals(44.0d, total, 0.0001d);
+    assertEquals(46.1764d, total, 0.0001d);
   }
 
   @Test

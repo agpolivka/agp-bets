@@ -92,6 +92,12 @@ public class PredictionBacktestService {
    * that could silently drift from what predictions actually use.
    */
   public record CalibrationRow(
+      // Added 2026-08-28 so a real temporal train/test split is possible (every calibration this
+      // app has ever done before this was fit and evaluated on the exact same full historical
+      // dataset - no held-out validation at all). Null gameDate is possible (see PlayerGameStat's
+      // own doc - pre-2014 nfl_schedules gap), season is always real.
+      Integer season,
+      String gameDate,
       double actual,
       double recentAverage,
       double seasonAverage,
@@ -99,7 +105,16 @@ public class PredictionBacktestService {
       double conditionsAdjustment,
       double rushingQualityAdjustment,
       double advancedMetricAdjustment,
-      double targetShareAdjustment) {}
+      double targetShareAdjustment,
+      // Raw trailing deltas (opponent's own recent average minus the league baseline) for the
+      // participation-sourced signals - not summed into opponentAdjustment above, and not yet
+      // scaled by any coefficient, since none has been picked yet. Exported so a real regression
+      // can test each for incremental significance controlling for every term above (which
+      // already includes the PFR-sourced pressures/missedTacklePct signals) before any coefficient
+      // gets chosen - see PlayerPredictionService#zoneCoverageRateDelta's doc and WORKPLAN.md.
+      double zoneCoverageRateDelta,
+      double avgPassRushersDelta,
+      double avgDefendersInBoxDelta) {}
 
   public OutcomeBacktestSummary runOutcomeBacktest() {
     Map<String, OutcomeAccumulator> accumulators = new LinkedHashMap<>();
@@ -209,6 +224,8 @@ public class PredictionBacktestService {
                 .computeIfAbsent(metric, key -> new ArrayList<>())
                 .add(
                     new CalibrationRow(
+                        targetGame.getSeason(),
+                        targetGame.getGameDate() == null ? null : targetGame.getGameDate().toString(),
                         actualValues.get(0),
                         recentAverage,
                         seasonAverage,
@@ -216,7 +233,10 @@ public class PredictionBacktestService {
                         projection.conditionsAdjustment(),
                         projection.rushingQualityAdjustment(),
                         projection.advancedMetricAdjustment(),
-                        projection.targetShareAdjustment()));
+                        projection.targetShareAdjustment(),
+                        predictionService.zoneCoverageRateDelta(opponentDefenseHistory, leagueAverages),
+                        predictionService.avgPassRushersDelta(opponentDefenseHistory, leagueAverages),
+                        predictionService.avgDefendersInBoxDelta(opponentDefenseHistory, leagueAverages)));
           }
         });
 

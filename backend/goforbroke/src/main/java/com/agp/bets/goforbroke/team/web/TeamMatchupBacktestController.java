@@ -2,8 +2,10 @@ package com.agp.bets.goforbroke.team.web;
 
 import com.agp.bets.goforbroke.team.service.TeamMatchupBacktestService;
 import com.agp.bets.goforbroke.team.service.TeamMatchupBacktestService.SpreadBacktestSummary;
+import com.agp.bets.goforbroke.team.service.TeamMatchupBacktestService.StyleCalibrationRow;
 import com.agp.bets.goforbroke.team.service.TeamMatchupBacktestService.TeamMatchupBacktestSummary;
 import com.agp.bets.goforbroke.team.service.TeamMatchupBacktestService.TotalsBacktestSummary;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,5 +33,10 @@ public class TeamMatchupBacktestController {
   @GetMapping("/spread")
   public SpreadBacktestSummary spread() {
     return teamMatchupBacktestService.runSpreadBacktest();
+  }
+
+  @GetMapping("/style-calibration")
+  public List<StyleCalibrationRow> styleCalibration() {
+    return teamMatchupBacktestService.runStyleCalibrationExport();
   }
 }

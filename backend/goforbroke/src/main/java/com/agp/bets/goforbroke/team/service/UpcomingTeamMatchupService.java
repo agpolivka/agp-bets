@@ -114,22 +114,27 @@ public class UpcomingTeamMatchupService {
 
       double homeRating = homeHistory.get(0).getRatingAfter();
       double awayRating = awayHistory.get(0).getRatingAfter();
-      TeamMatchupPredictionService.MatchupPrediction matchup = predictionService.predict(homeRating, awayRating);
+      // Computed once, shared by predict() (2026-08-28: real-calibrated offense/defense terms -
+      // see TeamMatchupPredictionService.OFFENSE_DEFENSE_INTERCEPT's doc) and expectedTotalPoints
+      // below, instead of each recomputing the same trailing averages independently.
+      double homeRecentScored = recentAverage(homeHistory, TeamStrengthRating::getPointsScored);
+      double homeRecentAllowed = recentAverage(homeHistory, TeamStrengthRating::getPointsAllowed);
+      double awayRecentScored = recentAverage(awayHistory, TeamStrengthRating::getPointsScored);
+      double awayRecentAllowed = recentAverage(awayHistory, TeamStrengthRating::getPointsAllowed);
+
+      TeamMatchupPredictionService.MatchupPrediction matchup =
+          predictionService.predict(homeRating, awayRating, homeRecentScored, homeRecentAllowed, awayRecentScored);
 
       // Prefer the real posted Vegas total when one exists - a real 2026-08-20 backtest finding
       // (see WORKPLAN.md) showed it explains meaningfully more of the real variance in game totals
       // (~9%) than our own recent-scoring-based estimate (~4%), so it's a genuinely more accurate
       // number, not just a convenient one. Falls back to the computed estimate for games far
-      // enough out that a line hasn't been posted yet. The margin/winner prediction itself is
-      // unaffected either way - that stays our own validated Elo signal, only the total changes.
+      // enough out that a line hasn't been posted yet.
       double expectedTotal =
           game.getTotalLine() != null
               ? game.getTotalLine()
               : predictionService.expectedTotalPoints(
-                  recentAverage(homeHistory, TeamStrengthRating::getPointsScored),
-                  recentAverage(homeHistory, TeamStrengthRating::getPointsAllowed),
-                  recentAverage(awayHistory, TeamStrengthRating::getPointsScored),
-                  recentAverage(awayHistory, TeamStrengthRating::getPointsAllowed));
+                  homeRecentScored, homeRecentAllowed, awayRecentScored, awayRecentAllowed);
       TeamMatchupPredictionService.ScorePrediction score =
           predictionService.predictScore(matchup.predictedMargin(), expectedTotal);
 

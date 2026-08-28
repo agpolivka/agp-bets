@@ -111,25 +111,85 @@ public class PlayerPredictionService {
   // is a quality tilt on top of the yardage the blend already projects, not a second independent
   // predictor of rushing volume.
   private static final double AFTER_CONTACT_QUALITY_COEFFICIENT = 0.35d;
+  // Real-calibrated (2026-08-28), the first genuine temporal train/test validation any coefficient
+  // in this file has had - every prior calibration (including the ones below this block, before
+  // today) was fit and evaluated on the exact same full historical dataset, never held out. Method:
+  // fit on season <= cutoff, evaluate held-out MAE on season > cutoff, repeated across 6
+  // independent cutoffs (2018-2023) to confirm the finding replicates rather than trusting one
+  // split. passingYards/touchdowns/passingTouchdowns/receivingYards all showed real, consistently
+  // *improving* held-out MAE across every single cutoff (passingYards +1.27% to +1.74%; touchdowns
+  // +2.20% to +4.10%; passingTouchdowns +0.18% to +0.38%; receivingYards +0.96% to +1.81%) - final
+  // values below are fit on the full 2014-2025 dataset for maximum precision, now that the method
+  // itself is validated. targetShareAdjustment (WOPR) was ALSO tested this way and failed badly -
+  // held-out MAE got worse in every replication despite looking "significant" in-sample (fitted
+  // fraction ~9x, which would have undone the 2026-08-20 correction) - left untouched, a real
+  // caught-before-shipping near miss, not applied. rushingYards/receptions showed no real signal
+  // either way - also left untouched. See WORKPLAN.md for the full numbers and methodology.
+  //
   // CPOE (completion_percentage_above_expectation) is already expressed relative to a league-wide
   // expectation baseline by nflverse's own model - unlike the coefficients above, no separate
   // baseline lookup or subtraction is needed here, just a scale from "percentage points" to yards/
-  // touchdowns. Small and hand-picked, same honesty caveat as every other coefficient in this file.
-  private static final double CPOE_PASSING_YARDS_COEFFICIENT = 3.0d;
-  private static final double CPOE_PASSING_TOUCHDOWNS_COEFFICIENT = 0.02d;
+  // touchdowns.
+  private static final double CPOE_PASSING_YARDS_COEFFICIENT = 0.0273d; // was 3.0d; fraction=0.0091 (p=0.93, not significant alone - but part of a jointly-validated refit, see block above), full n=4,959
+  private static final double CPOE_PASSING_TOUCHDOWNS_COEFFICIENT = 0.0054d; // was 0.02d; fraction=0.2695 (p=0.166), full n=4,959
   // Same shape as AFTER_CONTACT_QUALITY_COEFFICIENT - a quality tilt on receivingYards, not a
-  // second independent predictor of receiving volume.
-  private static final double RECEIVING_QUALITY_COEFFICIENT = 0.5d;
+  // second independent predictor of receiving volume. Sign flip (2026-08-28): consistently
+  // negative across all 6 replication cutoffs (-0.19 to -0.61), not just the full-dataset fit -
+  // real evidence a hot recent YAC-over-expectation stretch predicts *regression toward the mean*
+  // for future receivingYards, not more of the same. fraction=-0.1296 (p=0.056), full n=27,382.
+  private static final double RECEIVING_QUALITY_COEFFICIENT = -0.0648d; // was 0.5d
   // More pressure allowed by a defense suppresses the opposing QB - negative on purpose, unlike
   // the yardage-allowed coefficients above (which are positive because more yards/points allowed
-  // means an easier matchup). Small and hand-picked like every other coefficient here.
-  private static final double PRESSURE_PASSING_YARDS_COEFFICIENT = -2.0d;
-  private static final double PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT = -0.02d;
+  // means an easier matchup).
+  private static final double PRESSURE_PASSING_YARDS_COEFFICIENT = -1.3408d; // was -2.0d; fraction=0.6704 (p=0.094), full n=4,959
+  private static final double PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT = -0.0235d; // was -0.02d; fraction=1.1726 (p=0.055), full n=4,959
   // missedTacklePct deltas are small fractions (e.g. 0.03 = 3 points worse than average), so this
   // coefficient is scaled up accordingly rather than the ~0.08-0.10 used for whole-yard deltas
   // above - a defense missing 3 more tackles per 100 than average allows roughly a few extra
-  // yards/game on this estimate, not a large swing.
+  // yards/game on this estimate, not a large swing. rushingYards showed no real train/test signal
+  // (2026-08-28) - left untouched here.
   private static final double MISSED_TACKLE_YARDS_COEFFICIENT = 100.0d;
+  // receivingYards's own copy (2026-08-28) - was sharing MISSED_TACKLE_YARDS_COEFFICIENT with
+  // rushingYards above, but the two showed different real train/test behavior (rushingYards: no
+  // signal; receivingYards: real, replicated need to scale down - fraction=0.2432, p=0.0099, full
+  // n=27,382, fit on the opponentAdjustment composite MINUS the separately-and-already-validated
+  // zoneCoverageRateDelta contribution below, so this correction doesn't double-count that work).
+  private static final double MISSED_TACKLE_RECEIVING_YARDS_COEFFICIENT = 24.32d; // was sharing 100.0d
+  // Base opponentAdjustment coefficients (yardage/points-allowed vs. league average), real-
+  // calibrated with the same 2026-08-28 train/test methodology (see the block above) - extracted
+  // from inline literals in opponentAdjustment's switch into named constants now that they're
+  // genuinely calibrated, not just hand-picked. rushingYards/receptions showed no real train/test
+  // signal and keep their original inline hand-picked values (0.035d/0.0015d) unchanged.
+  private static final double PASSING_YARDS_OPPONENT_COEFFICIENT = 0.0469d; // was 0.07d; fraction=0.6704 (p=0.094), full n=4,959
+  private static final double TOUCHDOWNS_OPPONENT_COEFFICIENT = 0.0044d; // was 0.005d; fraction=0.8794 (p<0.0001), full n=27,382
+  private static final double RECEIVING_YARDS_OPPONENT_COEFFICIENT = 0.00365d; // was 0.015d; fraction=0.2432 (p=0.0099), full n=27,382 (fit excluding the zoneCoverageRateDelta contribution, see MISSED_TACKLE_RECEIVING_YARDS_COEFFICIENT's doc)
+  // Vegas game-total-line coefficients for touchdown-metrics, real-calibrated 2026-08-28 - split
+  // out of a single shared 0.03d constant (touchdowns/passingTouchdowns/rushingTouchdowns all used
+  // the same value) once real train/test evidence showed touchdowns and passingTouchdowns actually
+  // want meaningfully different magnitudes. rushingTouchdowns isn't a live-predicted metric in this
+  // app (see metricsForPosition) so it isn't independently tested - grouped with touchdowns' value
+  // in gameConditionsAdjustment's switch as the closer analogue (both non-passing scoring).
+  private static final double TOUCHDOWNS_TOTAL_LINE_COEFFICIENT = 0.0045d; // was sharing 0.03d; fraction=0.1512 (p<0.0001), full n=27,382
+  private static final double PASSING_TOUCHDOWNS_TOTAL_LINE_COEFFICIENT = 0.0213d; // was sharing 0.03d; fraction=0.7086 (p<0.0001), full n=4,959
+  // Real-calibrated (2026-08-26), same regression-against-the-raw-predictor method as SNAP_PCT_*
+  // below (not the current-coefficient-as-input method opponentAdjustment's other terms use, since
+  // no coefficient existed yet): fit actual ~ recentAverage + seasonAverage + opponentAdjustment +
+  // conditionsAdjustment + rushingQualityAdjustment + advancedMetricAdjustment +
+  // targetShareAdjustment + zoneCoverageRateDelta per metric, against every backtestable game with
+  // real trailing 2023-2025 participation history - controlling for opponentAdjustment (which
+  // already includes the PFR-sourced pressures/missedTacklePct signals), so a significant
+  // coefficient here is evidence of something genuinely incremental, not a repeat of an
+  // already-wired effect. receivingYards: coefficient 8.4465, p=0.019, n=14,473. receptions:
+  // coefficient 1.2441, p=2.94e-06 (highly significant), n=14,473. Direction is football-sane: more
+  // zone coverage than league average associates with more receptions and receiving yards allowed
+  // (zone tends to concede more underneath completions than man). avgPassRushersDelta and
+  // avgDefendersInBoxDelta were also tested this same way (passingYards/passingTouchdowns and
+  // rushingYards respectively) and did NOT hold up (p=0.10-0.97) - real, checked negative results,
+  // not wired in. See WORKPLAN.md for the full writeup, including the same-game correlation check
+  // that originally found this signal (a materially different, weaker claim than what's confirmed
+  // here).
+  private static final double ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT = 8.4465d;
+  private static final double ZONE_COVERAGE_RECEPTIONS_COEFFICIENT = 1.2441d;
   // Rough, hand-picked participation-likelihood estimates for injuryStatusMultiplier - see that
   // method's doc for why these are multiplicative rather than additive, and why they're not
   // fit against how often a "Questionable"/"Doubtful" player actually ends up suiting up.
@@ -417,17 +477,18 @@ public class PlayerPredictionService {
    * richer per-defender data aggregated to team-game level, so it lives here rather than as a
    * separate top-level adjustment field.
    *
-   * <p><b>Real-calibrated (2026-08-20)</b>, not hand-picked like most of this file's other
-   * coefficients: fit {@code actual ~ recentAverage + seasonAverage + opponentAdjustment + ...}
-   * per metric in R against every backtestable historical game (see {@code
-   * PredictionBacktestService#runCalibrationExport}), using the CURRENT hand-picked coefficients
-   * to compute opponentAdjustment as a regression input, then read off how much of that
-   * already-applied adjustment the real data actually supports. Every metric came back
-   * overscaled, consistently and often dramatically: rushingYards needed only 44% of its current
-   * magnitude (p&lt;0.0001, n=12,274), receivingYards 18% (p=0.0048, n=27,380), receptions 7%
-   * (p=0.003, n=27,380), touchdowns 16% (p&lt;0.0001, n=27,380); passingYards's evidence was
-   * weaker (69%, p=0.051, n=4,959) but still pointed the same direction, not the opposite one.
-   * Values below are the old hand-picked ones scaled by those real multipliers, not re-guessed.
+   * <p><b>Real-calibrated, twice.</b> First pass (2026-08-20): fit {@code actual ~ recentAverage +
+   * seasonAverage + opponentAdjustment + ...} per metric in R against every backtestable historical
+   * game (see {@code PredictionBacktestService#runCalibrationExport}), full-dataset only - no
+   * held-out validation yet at that point. Every metric came back overscaled: rushingYards needed
+   * 44%, receivingYards 18%, receptions 7%, touchdowns 16%, passingYards 69% (weaker evidence,
+   * p=0.051). <b>Second pass (2026-08-28)</b>: redid passingYards/touchdowns/receivingYards with a
+   * real temporal train/test split this time (fit on season&lt;=cutoff, evaluate held-out on
+   * season&gt;cutoff, replicated across 6 independent cutoffs 2018-2023 before trusting it) -
+   * receivingYards's fit was done on the composite MINUS the already-separately-validated
+   * zoneCoverageRateDelta contribution, so that term's own real calibration isn't double-counted.
+   * rushingYards/receptions showed no real held-out signal this second pass and keep their
+   * first-pass values unchanged. See each constant's own doc comment for exact fractions/p-values.
    */
   double opponentAdjustment(
       String metric, List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
@@ -454,11 +515,11 @@ public class PlayerPredictionService {
     if (!values.isEmpty()) {
       double opponentAverage = values.stream().mapToDouble(Integer::doubleValue).average().orElse(0.0d);
       baseAdjustment = switch (metric) {
-        case "passingYards" -> (opponentAverage - leagueAverages.passingYardsAllowed()) * 0.07d;
+        case "passingYards" -> (opponentAverage - leagueAverages.passingYardsAllowed()) * PASSING_YARDS_OPPONENT_COEFFICIENT;
         case "rushingYards" -> (opponentAverage - leagueAverages.rushingYardsAllowed()) * 0.035d;
-        case "receivingYards" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.015d;
+        case "receivingYards" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * RECEIVING_YARDS_OPPONENT_COEFFICIENT;
         case "receptions" -> (opponentAverage - leagueAverages.receivingYardsAllowed()) * 0.0015d;
-        case "touchdowns" -> (opponentAverage - leagueAverages.pointsAllowed()) * 0.005d;
+        case "touchdowns" -> (opponentAverage - leagueAverages.pointsAllowed()) * TOUCHDOWNS_OPPONENT_COEFFICIENT;
         default -> 0.0d;
       };
     }
@@ -473,8 +534,11 @@ public class PlayerPredictionService {
    * {@code rushingYards}/{@code receivingYards} using their recent missed-tackle rate. Same
    * real-baseline-vs-opponent-average shape as the rest of {@link #opponentAdjustment}, just a
    * second, independent pair of signals not derivable from the basic yards/points-allowed numbers
-   * already used there. Returns 0 for every other metric, and for opponents with no PFR advanced
-   * defense data yet (charting only goes back to 2018).
+   * already used there. Also folds in a real-calibrated zone-coverage-rate nudge on {@code
+   * receivingYards}/{@code receptions} (participation-sourced - see {@code
+   * ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT}'s doc for the regression). Returns 0 for every
+   * other metric, and for opponents with no relevant advanced-defense data yet (PFR charting only
+   * goes back to 2018, participation charting is only reliable from 2023).
    */
   private double advancedDefenseAdjustment(
       String metric, List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
@@ -482,8 +546,12 @@ public class PlayerPredictionService {
       case "passingYards" -> pressureDelta(defenseHistory, leagueAverages) * PRESSURE_PASSING_YARDS_COEFFICIENT;
       case "passingTouchdowns" ->
           pressureDelta(defenseHistory, leagueAverages) * PRESSURE_PASSING_TOUCHDOWNS_COEFFICIENT;
-      case "rushingYards", "receivingYards" ->
-          missedTackleDelta(defenseHistory, leagueAverages) * MISSED_TACKLE_YARDS_COEFFICIENT;
+      case "rushingYards" -> missedTackleDelta(defenseHistory, leagueAverages) * MISSED_TACKLE_YARDS_COEFFICIENT;
+      case "receivingYards" ->
+          missedTackleDelta(defenseHistory, leagueAverages) * MISSED_TACKLE_RECEIVING_YARDS_COEFFICIENT
+              + zoneCoverageRateDelta(defenseHistory, leagueAverages) * ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT;
+      case "receptions" ->
+          zoneCoverageRateDelta(defenseHistory, leagueAverages) * ZONE_COVERAGE_RECEPTIONS_COEFFICIENT;
       default -> 0.0d;
     };
   }
@@ -499,16 +567,41 @@ public class PlayerPredictionService {
   }
 
   private double missedTackleDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
-    List<Double> rates =
-        defenseHistory.stream()
-            .map(TeamDefenseGameStat::getMissedTacklePct)
-            .filter(java.util.Objects::nonNull)
-            .toList();
-    if (rates.isEmpty()) {
+    return averageDoubleDelta(defenseHistory, TeamDefenseGameStat::getMissedTacklePct, leagueAverages.missedTacklePct());
+  }
+
+  // Trailing-average-minus-league-baseline deltas for the participation-sourced signals (see
+  // TeamDefenseGameStat's doc). All three were exported raw via PredictionBacktestService
+  // #runCalibrationExport and regressed against real outcomes, controlling for
+  // opponentAdjustment (which already includes pressures/missedTacklePct above) - see
+  // ZONE_COVERAGE_RECEIVING_YARDS_COEFFICIENT's doc for the real numbers. Only
+  // zoneCoverageRateDelta held up (wired into advancedDefenseAdjustment above);
+  // avgPassRushersDelta/avgDefendersInBoxDelta did not (p=0.10-0.97) - kept here, unwired, as
+  // real checked negative results rather than deleted, same treatment as
+  // rushingYardsOverExpectedPerAtt/team_implied_spread got.
+  double zoneCoverageRateDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
+    return averageDoubleDelta(defenseHistory, TeamDefenseGameStat::getZoneCoverageRate, leagueAverages.zoneCoverageRate());
+  }
+
+  double avgPassRushersDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
+    return averageDoubleDelta(defenseHistory, TeamDefenseGameStat::getAvgPassRushers, leagueAverages.avgPassRushers());
+  }
+
+  double avgDefendersInBoxDelta(List<TeamDefenseGameStat> defenseHistory, LeagueDefenseAverages leagueAverages) {
+    return averageDoubleDelta(
+        defenseHistory, TeamDefenseGameStat::getAvgDefendersInBox, leagueAverages.avgDefendersInBox());
+  }
+
+  private double averageDoubleDelta(
+      List<TeamDefenseGameStat> defenseHistory,
+      java.util.function.Function<TeamDefenseGameStat, Double> accessor,
+      double leagueAverage) {
+    List<Double> values = defenseHistory.stream().map(accessor).filter(java.util.Objects::nonNull).toList();
+    if (values.isEmpty()) {
       return 0.0d;
     }
-    double average = rates.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
-    return average - leagueAverages.missedTacklePct();
+    double average = values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);
+    return average - leagueAverage;
   }
 
   /**
@@ -531,17 +624,19 @@ public class PlayerPredictionService {
    * for expected overall scoring volume, vs. {@link #DEFAULT_GAME_TOTAL_LINE} when the real one
    * isn't known).
    *
-   * <p><b>Partially real-calibrated (2026-08-20)</b>, same method/evidence as {@link
-   * #opponentAdjustment}'s doc: fit {@code actual ~ ... + conditionsAdjustment} per metric using
-   * the current hand-picked coefficients as the regression input. passingYards's combined wind+
-   * total-line effect needed only 51% of its current magnitude (p&lt;0.0001, n=4,959) - the
-   * passing-specific coefficients below (wind and both passing cases) are scaled by that factor.
-   * receivingYards needed only 12% (p&lt;0.0001, n=27,380) - its total-line coefficient is scaled
-   * accordingly. rushingYards showed literally no measurable effect (p=0.93, n=12,274) - its
-   * total-line coefficient is cut to a small residual rather than removed outright, since "no
-   * measurable effect in this sample" isn't the same as "definitely zero." The touchdown-metrics
-   * case (shared across passingTouchdowns/rushingTouchdowns/touchdowns) wasn't isolated by this
-   * regression pass and is left as the original hand-picked guess.
+   * <p><b>Real-calibrated, twice.</b> First pass (2026-08-20): fit {@code actual ~ ... +
+   * conditionsAdjustment} per metric using the then-current hand-picked coefficients as the
+   * regression input - full-dataset only, no held-out validation. passingYards needed 51% of its
+   * magnitude, receivingYards 12%, rushingYards showed no measurable effect (kept as a small
+   * residual, not removed). The touchdown-metrics case (shared across passingTouchdowns/
+   * rushingTouchdowns/touchdowns) wasn't isolated that pass. <b>Second pass (2026-08-28)</b>
+   * redid passingYards/receivingYards/passingTouchdowns/touchdowns properly - a real temporal
+   * train/test split (fit on season&lt;=cutoff, evaluate held-out on season&gt;cutoff), replicated
+   * across 6 independent cutoffs to confirm it generalizes before trusting it (see the constants'
+   * own doc comments for exact fractions/p-values/citations - this is also where the shared
+   * touchdown-metrics constant finally got split into its own passingTouchdowns/touchdowns
+   * values, since real evidence showed they want different magnitudes). rushingYards's total-line
+   * coefficient is untouched both passes - still no real signal.
    *
    * <p>Backtesting uses real historical values from the target game's own stored {@code
    * PlayerGameStat} row (nflverse-sourced, via {@code nfl_schedules}). The live path only reliably
@@ -558,8 +653,8 @@ public class PlayerPredictionService {
     if (conditions.isOutdoors() && conditions.windMph() != null) {
       double windAboveThreshold = Math.max(0.0d, conditions.windMph() - WIND_EFFECT_THRESHOLD_MPH);
       adjustment += switch (metric) {
-        case "passingYards" -> -windAboveThreshold * 0.6d;
-        case "passingTouchdowns" -> -windAboveThreshold * 0.008d;
+        case "passingYards" -> -windAboveThreshold * 0.6214d; // was 0.6d; 2026-08-28 train/test fraction=1.0356
+        case "passingTouchdowns" -> -windAboveThreshold * 0.00567d; // was 0.008d; 2026-08-28 train/test fraction=0.7086
         default -> 0.0d;
       };
     }
@@ -567,10 +662,11 @@ public class PlayerPredictionService {
     double totalLine = conditions.gameTotalLine() != null ? conditions.gameTotalLine() : DEFAULT_GAME_TOTAL_LINE;
     double totalDelta = totalLine - DEFAULT_GAME_TOTAL_LINE;
     adjustment += switch (metric) {
-      case "passingYards" -> totalDelta * 1.5d;
+      case "passingYards" -> totalDelta * 1.5534d; // was 1.5d; 2026-08-28 train/test fraction=1.0356, p<0.0001, full n=4,959
       case "rushingYards" -> totalDelta * 0.1d;
-      case "receivingYards" -> totalDelta * 0.24d;
-      case "passingTouchdowns", "rushingTouchdowns", "touchdowns" -> totalDelta * 0.03d;
+      case "receivingYards" -> totalDelta * 0.2443d; // was 0.24d; 2026-08-28 train/test fraction=1.0181, p<0.0001, full n=27,382
+      case "passingTouchdowns" -> totalDelta * PASSING_TOUCHDOWNS_TOTAL_LINE_COEFFICIENT;
+      case "rushingTouchdowns", "touchdowns" -> totalDelta * TOUCHDOWNS_TOTAL_LINE_COEFFICIENT;
       default -> 0.0d;
     };
 
@@ -844,7 +940,17 @@ public class PlayerPredictionService {
         // used as the fallback the same way 225/110/125/21 above are, not derived from this
         // database's own stored data like the primary averageOrDefault path is.
         averageOrDefault(defenseGames, TeamDefenseGameStat::getPressures, 8.5d),
-        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getMissedTacklePct, 0.09d));
+        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getMissedTacklePct, 0.09d),
+        // Real computed averages (not guesses), same treatment as the two fallbacks above -
+        // queried directly against this database's own 2023-2025 participation backfill
+        // (1,710 team-games) on 2026-08-26, right after that backfill landed. Notably, real zone
+        // coverage rate came back well under the ~55-65% folk-wisdom figure - confirmed directly
+        // against the raw MAN_COVERAGE/ZONE_COVERAGE play counts, not a computation bug (see
+        // import_participation_defense.R's header comment for the real zero-sentinel bug that WAS
+        // found and fixed in the same pass, affecting avgPassRushers/avgDefendersInBox only).
+        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getZoneCoverageRate, 0.2885d),
+        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getAvgPassRushers, 4.3117d),
+        averageOrDefaultDouble(defenseGames, TeamDefenseGameStat::getAvgDefendersInBox, 6.2013d));
   }
 
   private double averageOrDefault(
@@ -974,7 +1080,10 @@ public class PlayerPredictionService {
       double receivingYardsAllowed,
       double pointsAllowed,
       double pressuresPerGame,
-      double missedTacklePct) {}
+      double missedTacklePct,
+      double zoneCoverageRate,
+      double avgPassRushers,
+      double avgDefendersInBox) {}
 
   private record CachedLeagueAverages(LeagueDefenseAverages averages, Instant expiresAt) {
     private boolean isExpired(Instant now) {
