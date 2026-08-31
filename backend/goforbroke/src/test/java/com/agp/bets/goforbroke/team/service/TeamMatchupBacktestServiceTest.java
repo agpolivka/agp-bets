@@ -137,6 +137,61 @@ class TeamMatchupBacktestServiceTest {
   }
 
   @Test
+  void marginAndTotalsBacktestsEachUseTheirOwnSeparatelyCalibratedTrailingWindow() {
+    // 2026-08-31 real finding: real held-out validation found margin/win-pick accuracy wants a
+    // 6-game trailing window while totals MAE wants a 10-game window - genuinely different from
+    // each other and from the old shared 8. KC gets 11 prior games with strictly increasing scored
+    // (1..11) and strictly decreasing allowed (110..10) so trailing-6 and trailing-10 averages are
+    // unambiguously different, proving runBacktest and runTotalsBacktest each read their own window
+    // rather than one shared value. LAR (away) gets only 1 prior game - below either window size,
+    // so it can't itself distinguish the two windows; only KC's (home) side does.
+    Team chiefs = new Team();
+    chiefs.setId(1L);
+    chiefs.setAbbreviation("KC");
+    Team rams = new Team();
+    rams.setId(2L);
+    rams.setAbbreviation("LAR");
+
+    // KC's 11 filler rows are all real, otherwise-independently-backtestable "home" rows (matching
+    // the shape every other row in this file uses) - dating LAR's one prior row well outside that
+    // range (rather than reusing one of the 11 dates) keeps it from accidentally matching one of
+    // them as its own away counterpart and inflating games() beyond the single target game below.
+    java.util.List<TeamStrengthRating> allRatings = new java.util.ArrayList<>();
+    for (int week = 1; week <= 11; week++) {
+      TeamStrengthRating kcGame =
+          rating(chiefs, LocalDate.parse("2025-01-01").plusWeeks(week).toString(), "home", "LA", week, 120 - 10 * week);
+      allRatings.add(kcGame);
+    }
+    allRatings.add(rating(rams, "2024-06-01", "away", "KC", 25, 15));
+
+    TeamStrengthRating kcTarget = rating(chiefs, LocalDate.parse("2025-01-01").plusWeeks(12).toString(), "home", "LA", 24, 20);
+    kcTarget.setRatingBefore(1600.0d);
+    TeamStrengthRating ramsTarget = rating(rams, LocalDate.parse("2025-01-01").plusWeeks(12).toString(), "away", "KC", 20, 24);
+    ramsTarget.setRatingBefore(1500.0d);
+    allRatings.add(kcTarget);
+    allRatings.add(ramsTarget);
+
+    when(repository.findAll()).thenReturn(allRatings);
+    when(nflScheduleRepository.findAll()).thenReturn(List.of());
+
+    TeamMatchupBacktestService.TeamMatchupBacktestSummary marginSummary = service.runBacktest();
+    TeamMatchupBacktestService.TotalsBacktestSummary totalsSummary = service.runTotalsBacktest();
+
+    assertEquals(1, marginSummary.games());
+    // window=6: homeRecentScored=mean(6..11)=8.5, homeRecentAllowed=mean(60,50,40,30,20,10)=35.0,
+    // awayRecentScored=25 (LAR's only prior game). eloMargin=(1600-1500+55)/25=6.2. predictedMargin
+    // = 5.8815 + 0.6427*6.2 + 0.2283*8.5 - 0.1948*35 - 0.2695*25 = -1.74871. actualMargin=24-20=4.
+    assertEquals(5.74871d, marginSummary.meanAbsoluteMarginError(), 0.0001d);
+
+    assertEquals(1, totalsSummary.games());
+    // window=10: homeRecentScored=mean(2..11)=6.5, homeRecentAllowed=mean(100,90,...,10)=55.0,
+    // awayRecentScored=25, awayRecentAllowed=15. predictedTotal = 20.9851 + 0.4702*6.5 + 0.1335*55
+    // + 0.3024*25 + 0.1741*15 = 41.5554. actualTotal=24+20=44.
+    assertEquals(41.5554d, totalsSummary.meanPredictedTotal(), 0.0001d);
+    assertEquals(2.4446d, totalsSummary.meanAbsoluteError(), 0.0001d);
+  }
+
+  @Test
   void totalsBacktestPrefersARealPostedTotalLineOverTheComputedEstimate() {
     Team chiefs = new Team();
     chiefs.setId(1L);

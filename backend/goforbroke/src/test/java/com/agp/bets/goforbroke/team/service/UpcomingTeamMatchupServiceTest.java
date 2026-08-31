@@ -85,6 +85,45 @@ class UpcomingTeamMatchupServiceTest {
   }
 
   @Test
+  void predictUsesTheMarginWindowAndExpectedTotalPointsUsesTheSeparateTotalsWindow() {
+    // 2026-08-31: same real finding as TeamMatchupBacktestServiceTest's equivalent test - margin
+    // wants a 6-game trailing window, totals wants 10. KC gets 11 rating rows (most recent first
+    // after the service's own sort) with strictly increasing scored (1..11, so trailing-6 and
+    // trailing-10 means are unambiguously different) and strictly decreasing allowed (110..10);
+    // only the single most recent row's ratingAfter (1600) is actually read by the service. LAR
+    // gets one older row (below either window size, so it can't itself distinguish them).
+    NflSchedule upcomingGame = game("2026_01_LA_KC", 2026, "REG", 1, "2026-09-13", "KC", "LA");
+    when(nflScheduleRepository.findAllByHomeScoreIsNullAndGameTypeInOrderByGamedayAsc(Mockito.anyList()))
+        .thenReturn(List.of(upcomingGame));
+    when(teamRepository.findAllByOrderByDisplayNameAsc()).thenReturn(List.of(chiefs, rams));
+
+    List<TeamStrengthRating> allRatings = new ArrayList<>();
+    for (int week = 1; week <= 11; week++) {
+      TeamStrengthRating kcRow = rating(chiefs, LocalDate.parse("2025-01-01").plusWeeks(week).toString(), 1500.0d, week, 120 - 10 * week);
+      allRatings.add(kcRow);
+    }
+    // Most recent KC row (week 11) is the one whose ratingAfter the service actually reads.
+    allRatings.get(10).setRatingAfter(1600.0d);
+    allRatings.add(rating(rams, "2024-06-01", 1500.0d, 25, 15));
+    when(teamStrengthRatingRepository.findAll()).thenReturn(allRatings);
+
+    UpcomingMatchupResponse matchup = service.upcomingMatchups().get(0);
+
+    // margin window=6: homeRecentScored=mean(6..11)=8.5, homeRecentAllowed=mean(60,50,40,30,20,10)
+    // =35.0, awayRecentScored=25. eloMargin=(1600-1500+55)/25=6.2. predictedMargin = 5.8815 +
+    // 0.6427*6.2 + 0.2283*8.5 - 0.1948*35 - 0.2695*25 = -1.74871.
+    assertEquals(-1.74871d, matchup.predictedMargin(), 0.0001d);
+    // totals window=10: homeRecentScored=mean(2..11)=6.5, homeRecentAllowed=mean(100,...,10)=55.0,
+    // awayRecentScored=25, awayRecentAllowed=15. expectedTotal = 20.9851 + 0.4702*6.5 + 0.1335*55 +
+    // 0.3024*25 + 0.1741*15 = 41.5554. predictedHomeScore=round((41.5554-1.74871)/2)=round(19.903)
+    // =20; predictedAwayScore=round((41.5554+1.74871)/2)=round(21.652)=22 - if this were still
+    // using one shared window (8) for both, these exact numbers wouldn't come out this way.
+    assertEquals(20L, matchup.predictedHomeScore());
+    assertEquals(22L, matchup.predictedAwayScore());
+    assertEquals("LAR", matchup.predictedWinnerAbbreviation());
+  }
+
+  @Test
   void skipsGamesWhereEitherTeamHasNoRatingYet() {
     NflSchedule upcomingGame = game("2026_01_LA_KC", 2026, "REG", 1, "2026-09-13", "KC", "LA");
 

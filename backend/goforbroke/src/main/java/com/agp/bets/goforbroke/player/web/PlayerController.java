@@ -2,6 +2,7 @@ package com.agp.bets.goforbroke.player.web;
 
 import com.agp.bets.goforbroke.player.domain.Player;
 import com.agp.bets.goforbroke.player.service.EspnPlayerIngestionService;
+import com.agp.bets.goforbroke.player.service.PlayerLeaderboardService;
 import com.agp.bets.goforbroke.player.web.dto.PlayerCandidateResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerMetadataBackfillResponse;
 import com.agp.bets.goforbroke.player.web.dto.PlayerResponse;
@@ -23,10 +24,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlayerController {
 
   private final EspnPlayerIngestionService ingestionService;
+  private final PlayerLeaderboardService leaderboardService;
 
   @GetMapping
   public List<PlayerResponse> listPlayers() {
     return ingestionService.listPlayers().stream().map(PlayerResponse::from).toList();
+  }
+
+  // Real, computed-from-live-projections leaderboard (see PlayerLeaderboardService's doc) - powers
+  // the homepage "Featured players" spotlight. Cached server-side (30 min), so this is cheap to
+  // call even though the underlying computation evaluates ~480 real candidates.
+  @GetMapping("/leaderboard")
+  public PlayerLeaderboardService.LeaderboardResponse leaderboard() {
+    return leaderboardService.topProjectedPlayers();
   }
 
   @GetMapping("/{espnAthleteId}")

@@ -43,16 +43,34 @@ public class UpcomingTeamMatchupService {
   // a week's slate is never split across the boundary.
   private static final int PUBLIC_MAX_DISTINCT_WEEKS = 2;
 
-  // How many of a team's most recent games to average points scored/allowed over when estimating
-  // a real per-game total. Actually compared against 4 and 1 via TeamMatchupBacktestService
-  // .runTotalsBacktest() (2026-08-20), unlike most constants in this codebase - 8 has the best MAE
-  // (10.93 vs 11.23 at 4, 12.78 at 1). Shorter windows widen the predicted range some (span 36 ->
-  // 68 at window=1) but never get close to the real range (actual totals span 3-105 in the same
-  // data) while making the central prediction meaningfully worse - so this isn't "the best window
-  // we found," it's "window length has a real ceiling on fixing the range problem at all, and 8 is
-  // the best accuracy among the options tested." A structurally different approach (not just a
-  // shorter window) is what would actually close the range gap - see WORKPLAN.md.
+  // How many of a team's most recent games to average style features (pass rate, shotgun rate,
+  // zone coverage rate, etc.) over in TeamMatchupBacktestService's style-calibration export. Not
+  // the same question as the two scoring windows below - style-vs-style matchup awareness was
+  // investigated and found to be a real, converging null (see WORKPLAN.md, Priority 5), so this
+  // window was never itself retested and stays at its original value.
   static final int RECENT_GAMES_FOR_SCORING = 8;
+
+  // Real-calibrated (2026-08-31), genuine held-out train/test split (same 6-cutoff discipline,
+  // 2018-2023, as every other recalibration this session) - the first time either scoring window
+  // was retested against real alternatives rather than the 2026-08-20 in-sample-only comparison
+  // (against 4 and 1) that originally picked 8 for both purposes. Directly computed from raw
+  // nflverse scores in R (not through the Java calibration export - these windows aren't one of
+  // its fields), holding the already-fit OFFENSE_DEFENSE_*/TOTAL_POINTS_* regression coefficients
+  // fixed and varying only the window feeding their four raw inputs (home/away recent scored/
+  // allowed). The margin/win-pick side and the totals side wanted genuinely different windows -
+  // window 6 beat the old 8 on real held-out winner-pick accuracy on every single one of the 6
+  // cutoffs (mean 64.49% -> 65.21%), while margin MAE itself had no single clean winner across
+  // windows (mixed by cutoff) - kept at 6 since winner-pick accuracy is the metric this whole
+  // priority is scored on (63.9% baseline, see Priority 5). See RECENT_GAMES_FOR_TOTALS_SCORING
+  // for the separate, totals-specific finding.
+  static final int RECENT_GAMES_FOR_MARGIN_SCORING = 6;
+
+  // Real-calibrated (2026-08-31) - see RECENT_GAMES_FOR_MARGIN_SCORING's doc for the shared
+  // methodology. Window 10 beat the old 8 on real held-out totals MAE on every single one of the 6
+  // cutoffs (mean 10.521 -> 10.494) - a smaller, consistent win, not a range-compression fix (see
+  // TOTAL_POINTS_INTERCEPT's own doc in TeamMatchupPredictionService for that separate, still-open
+  // problem).
+  static final int RECENT_GAMES_FOR_TOTALS_SCORING = 10;
 
   private final NflScheduleRepository nflScheduleRepository;
   private final TeamRepository teamRepository;
@@ -114,27 +132,35 @@ public class UpcomingTeamMatchupService {
 
       double homeRating = homeHistory.get(0).getRatingAfter();
       double awayRating = awayHistory.get(0).getRatingAfter();
-      // Computed once, shared by predict() (2026-08-28: real-calibrated offense/defense terms -
-      // see TeamMatchupPredictionService.OFFENSE_DEFENSE_INTERCEPT's doc) and expectedTotalPoints
-      // below, instead of each recomputing the same trailing averages independently.
-      double homeRecentScored = recentAverage(homeHistory, TeamStrengthRating::getPointsScored);
-      double homeRecentAllowed = recentAverage(homeHistory, TeamStrengthRating::getPointsAllowed);
-      double awayRecentScored = recentAverage(awayHistory, TeamStrengthRating::getPointsScored);
-      double awayRecentAllowed = recentAverage(awayHistory, TeamStrengthRating::getPointsAllowed);
+      // 2026-08-31: margin/win-pick and totals now use separately-calibrated windows (see
+      // RECENT_GAMES_FOR_MARGIN_SCORING's doc) - real held-out validation found they genuinely
+      // want different values, so each is computed on its own rather than sharing one trailing
+      // average the way both used to.
+      double homeRecentScoredForMargin = recentAverage(homeHistory, TeamStrengthRating::getPointsScored, RECENT_GAMES_FOR_MARGIN_SCORING);
+      double homeRecentAllowedForMargin = recentAverage(homeHistory, TeamStrengthRating::getPointsAllowed, RECENT_GAMES_FOR_MARGIN_SCORING);
+      double awayRecentScoredForMargin = recentAverage(awayHistory, TeamStrengthRating::getPointsScored, RECENT_GAMES_FOR_MARGIN_SCORING);
 
       TeamMatchupPredictionService.MatchupPrediction matchup =
-          predictionService.predict(homeRating, awayRating, homeRecentScored, homeRecentAllowed, awayRecentScored);
+          predictionService.predict(
+              homeRating, awayRating, homeRecentScoredForMargin, homeRecentAllowedForMargin, awayRecentScoredForMargin);
 
       // Prefer the real posted Vegas total when one exists - a real 2026-08-20 backtest finding
       // (see WORKPLAN.md) showed it explains meaningfully more of the real variance in game totals
       // (~9%) than our own recent-scoring-based estimate (~4%), so it's a genuinely more accurate
       // number, not just a convenient one. Falls back to the computed estimate for games far
       // enough out that a line hasn't been posted yet.
-      double expectedTotal =
-          game.getTotalLine() != null
-              ? game.getTotalLine()
-              : predictionService.expectedTotalPoints(
-                  homeRecentScored, homeRecentAllowed, awayRecentScored, awayRecentAllowed);
+      double expectedTotal;
+      if (game.getTotalLine() != null) {
+        expectedTotal = game.getTotalLine();
+      } else {
+        double homeRecentScoredForTotals = recentAverage(homeHistory, TeamStrengthRating::getPointsScored, RECENT_GAMES_FOR_TOTALS_SCORING);
+        double homeRecentAllowedForTotals = recentAverage(homeHistory, TeamStrengthRating::getPointsAllowed, RECENT_GAMES_FOR_TOTALS_SCORING);
+        double awayRecentScoredForTotals = recentAverage(awayHistory, TeamStrengthRating::getPointsScored, RECENT_GAMES_FOR_TOTALS_SCORING);
+        double awayRecentAllowedForTotals = recentAverage(awayHistory, TeamStrengthRating::getPointsAllowed, RECENT_GAMES_FOR_TOTALS_SCORING);
+        expectedTotal =
+            predictionService.expectedTotalPoints(
+                homeRecentScoredForTotals, homeRecentAllowedForTotals, awayRecentScoredForTotals, awayRecentAllowedForTotals);
+      }
       TeamMatchupPredictionService.ScorePrediction score =
           predictionService.predictScore(matchup.predictedMargin(), expectedTotal);
 
@@ -184,8 +210,8 @@ public class UpcomingTeamMatchupService {
     return scoped;
   }
 
-  private double recentAverage(List<TeamStrengthRating> historyDesc, ToIntFunction<TeamStrengthRating> accessor) {
-    List<TeamStrengthRating> recent = historyDesc.stream().limit(RECENT_GAMES_FOR_SCORING).toList();
+  private double recentAverage(List<TeamStrengthRating> historyDesc, ToIntFunction<TeamStrengthRating> accessor, int window) {
+    List<TeamStrengthRating> recent = historyDesc.stream().limit(window).toList();
     return recent.isEmpty()
         ? TeamMatchupPredictionService.DEFAULT_GAME_TOTAL_POINTS / 2.0d
         : recent.stream().mapToInt(accessor).average().orElse(TeamMatchupPredictionService.DEFAULT_GAME_TOTAL_POINTS / 2.0d);

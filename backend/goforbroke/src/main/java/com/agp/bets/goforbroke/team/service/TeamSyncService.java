@@ -33,6 +33,13 @@ public class TeamSyncService {
 
   private static final int TEAM_HISTORY_BACKFILL_YEARS = 2;
   private static final long TEAM_REFRESH_TTL_HOURS = 12;
+  // ESPN's own season-type encoding (see EspnTeamClient#fetchTeamSchedule's doc) - deliberately
+  // excludes preseason (1): exhibition games with backups playing don't belong as a real "upcoming
+  // opponent" for a betting-focused app even when they're technically the next game on the
+  // calendar, and including them was the direct cause of a 2026-08-31 bug (upcoming-opponent
+  // resolution silently went stale for several teams once their preseason games all completed,
+  // because the old bare `?season=YYYY` request only ever returned preseason events at all).
+  private static final int[] RELEVANT_SEASON_TYPES = {2, 3};
 
   private final TeamRepository teamRepository;
   private final TeamDefenseGameStatRepository teamDefenseGameStatRepository;
@@ -113,14 +120,18 @@ public class TeamSyncService {
 
   // Record/standing summary and upcoming opponent - the identity-adjacent context that stays on
   // ESPN. hydrateUpcomingOpponent only mutates the in-memory team, so this ends with an explicit
-  // save to persist whatever it set on the last iterated season.
+  // save to persist whatever it set across every season/seasonType fetched.
   private void hydrateSeasonContext(Team team) {
     int currentYear = Year.now(clock).getValue();
+    List<JsonNode> schedules = new ArrayList<>();
     for (int season = currentYear - TEAM_HISTORY_BACKFILL_YEARS + 1; season <= currentYear; season++) {
-      JsonNode schedule = espnTeamClient.fetchTeamSchedule(team.getEspnTeamId(), season);
-      hydrateSeasonSummary(team, schedule);
-      hydrateUpcomingOpponent(team, schedule);
+      for (int seasonType : RELEVANT_SEASON_TYPES) {
+        JsonNode schedule = espnTeamClient.fetchTeamSchedule(team.getEspnTeamId(), season, seasonType);
+        hydrateSeasonSummary(team, schedule);
+        schedules.add(schedule);
+      }
     }
+    hydrateUpcomingOpponent(team, schedules);
     teamRepository.save(team);
   }
 
@@ -173,18 +184,20 @@ public class TeamSyncService {
     teamRepository.save(team);
   }
 
-  private void hydrateUpcomingOpponent(Team team, JsonNode schedule) {
+  private void hydrateUpcomingOpponent(Team team, List<JsonNode> schedules) {
     LocalDate today = LocalDate.now(clock);
     UpcomingOpponent nextOpponent = null;
 
-    for (JsonNode event : extractEventNodes(schedule)) {
-      Optional<UpcomingOpponent> candidate = toUpcomingOpponent(team.getEspnTeamId(), event, today);
-      if (candidate.isEmpty()) {
-        continue;
-      }
+    for (JsonNode schedule : schedules) {
+      for (JsonNode event : extractEventNodes(schedule)) {
+        Optional<UpcomingOpponent> candidate = toUpcomingOpponent(team.getEspnTeamId(), event, today);
+        if (candidate.isEmpty()) {
+          continue;
+        }
 
-      if (nextOpponent == null || candidate.get().gameDate().isBefore(nextOpponent.gameDate())) {
-        nextOpponent = candidate.get();
+        if (nextOpponent == null || candidate.get().gameDate().isBefore(nextOpponent.gameDate())) {
+          nextOpponent = candidate.get();
+        }
       }
     }
 

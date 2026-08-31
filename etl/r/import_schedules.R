@@ -19,6 +19,15 @@ run_job("import_schedules", function() {
       home_team = as.character(home_team),
       away_team = as.character(away_team),
       stadium = ifelse(is.na(stadium), NA_character_, as.character(stadium)),
+      # nflverse only ever publishes a date (gameday) and a local kickoff time-of-day (gametime,
+      # e.g. "20:20") - no combined timestamp column exists (confirmed directly, 2026-08-31). The
+      # published gametime is consistently US/Eastern regardless of the actual stadium's own
+      # timezone (broadcast convention - even London-game kickoffs like "09:30" are Eastern, not
+      # local UK time), so parsing it as America/New_York and converting to UTC is correct, not an
+      # approximation. Used to lock picks at real kickoff instead of only at whatever point stored
+      # data happens to show a final score (see UserPickService) - a naive "has a score yet" check
+      # lags real kickoff by however long until the next stats refresh.
+      kickoff_at = as.POSIXct(paste(gameday, gametime), format = "%Y-%m-%d %H:%M", tz = "America/New_York"),
       source_url = paste0("https://nflverse.nflverse.com/schedules/", season_arg),
       raw_payload = to_json_text(as.list(pick(everything()))),
       fetched_at = Sys.time(),
@@ -113,6 +122,11 @@ run_job("import_schedules", function() {
     "
   )
 
+  # Added 2026-08-31 for the picks feature's real kickoff-time lock - a plain ALTER (not part of
+  # the create-table-if-not-exists block above) so it also lands on the already-existing table in
+  # every real database, not just a fresh one.
+  dbExecute(con, "alter table nfl_schedules add column if not exists kickoff_at timestamptz")
+
   run_id <- dbGetQuery(
     con,
     "insert into etl_import_runs (job_name, started_at, row_count, notes) values ($1, $2, 0, $3) returning id",
@@ -125,7 +139,7 @@ run_job("import_schedules", function() {
       con,
       "
       insert into nfl_schedules (
-        game_id, season, game_type, week, gameday, weekday, gametime, away_team, away_score,
+        game_id, season, game_type, week, gameday, weekday, gametime, kickoff_at, away_team, away_score,
         home_team, home_score, location, result, total, overtime, old_game_id, gsis, nfl_detail_id,
         pfr, pff, espn, ftn, away_rest, home_rest, away_moneyline, home_moneyline, spread_line,
         away_spread_odds, home_spread_odds, total_line, under_odds, over_odds, div_game, roof,
@@ -135,7 +149,7 @@ run_job("import_schedules", function() {
       ) values (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
         $26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
-        $48,$49,$50,$51
+        $48,$49,$50,$51,$52
       )
       on conflict (game_id) do update set
         season = excluded.season,
@@ -144,6 +158,7 @@ run_job("import_schedules", function() {
         gameday = excluded.gameday,
         weekday = excluded.weekday,
         gametime = excluded.gametime,
+        kickoff_at = excluded.kickoff_at,
         away_team = excluded.away_team,
         away_score = excluded.away_score,
         home_team = excluded.home_team,
@@ -196,6 +211,7 @@ run_job("import_schedules", function() {
         row$gameday[[1]],
         row$weekday[[1]],
         row$gametime[[1]],
+        row$kickoff_at[[1]],
         row$away_team[[1]],
         row$away_score[[1]],
         row$home_team[[1]],

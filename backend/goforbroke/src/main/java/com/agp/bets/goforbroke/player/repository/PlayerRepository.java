@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.repository.query.Param;
 
 public interface PlayerRepository extends JpaRepository<Player, Long> {
 
@@ -41,4 +42,19 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
       order by p.displayName asc
       """)
   List<Player> findPlayersNeedingMetadataBackfill();
+
+  // Real candidate pool for PlayerLeaderboardService - active roster players at a given position
+  // with a real, non-thin game sample on record (minGames matches RECENT_GAME_WINDOW's default, an
+  // already-established threshold elsewhere in this app, not a new arbitrary number). Filters out
+  // practice-squad/inactive/just-signed players whose single-digit-game prediction would be mostly
+  // noise anyway - same spirit as THIN_SAMPLE_GAME_THRESHOLD's cache-TTL distinction.
+  @Query(
+      """
+      select p
+      from Player p
+      where p.position = :position
+        and p.active = true
+        and (select count(g) from PlayerGameStat g where g.player = p) >= :minGames
+      """)
+  List<Player> findActiveCandidatesByPosition(@Param("position") String position, @Param("minGames") long minGames);
 }

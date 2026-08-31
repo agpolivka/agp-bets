@@ -46,6 +46,16 @@ public class EspnTeamClient {
     return fetchJson(buildTeamScheduleUrl(teamId, season));
   }
 
+  // seasonType: ESPN's own encoding (1=preseason, 2=regular season, 3=postseason). Confirmed by
+  // direct testing (2026-08-31): a bare `?season=YYYY` with no seasonType silently defaults to
+  // preseason (type 1) rather than "the whole season" or "whatever's current" - during the real
+  // gap between preseason ending and the regular season starting, that default returns zero
+  // relevant events, which is exactly what broke upcoming-opponent resolution. Explicit seasonType
+  // avoids relying on that undocumented default at all.
+  public JsonNode fetchTeamSchedule(String teamId, Integer season, Integer seasonType) {
+    return fetchJson(buildTeamScheduleUrl(teamId, season, seasonType));
+  }
+
   public String buildTeamUrl(String teamId) {
     return TEAM_PROFILE_ENDPOINT + "/" + teamId;
   }
@@ -58,6 +68,14 @@ public class EspnTeamClient {
     String url = buildTeamScheduleUrl(teamId);
     if (season != null) {
       url += "?season=" + season;
+    }
+    return url;
+  }
+
+  public String buildTeamScheduleUrl(String teamId, Integer season, Integer seasonType) {
+    String url = buildTeamScheduleUrl(teamId, season);
+    if (seasonType != null) {
+      url += (season != null ? "&" : "?") + "seasontype=" + seasonType;
     }
     return url;
   }

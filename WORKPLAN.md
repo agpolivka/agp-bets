@@ -90,26 +90,35 @@ Recently Completed), a real bug found and fixed along the way. Remaining open it
 **Cleared as of 2026-08-30 (continued again)** - with the calibration campaign and the stats-refresh
 dry run both done, the user asked to move to UI/UX (frontend hasn't been surveyed for real gaps
 since early in this document's history). A read-only frontend investigation turned up a concrete,
-prioritized set of next items - not yet built, just scoped and agreed with the user:
+prioritized set of next items, agreed with the user. Item 1 (the featured-players swap) is now
+done, in two passes - see Recently Completed. Remaining:
 
-1. **Replace the hardcoded "Featured players" homepage section with real, data-driven picks**
-   (recommended starting point). `frontend/src/data/featuredPlayers.js` is 3 static players
-   (Josh Allen, Jalen Hurts, Terry McLaurin) with hand-written blurbs, never touching the API -
-   same "hand-picked instead of real" pattern this whole session has been fixing on the backend,
-   just never applied to the UI. Something like "this week's top predicted performers" or
-   "trending searches," sourced from real prediction data, would replace it with something genuine.
-2. **UI copy is now quietly stale for 3 metrics.** The 2026-08-30 per-metric recent-game window
+1. **UI copy is now quietly stale for 3 metrics.** The 2026-08-30 per-metric recent-game window
    change (receivingYards/passingTouchdowns/turnovers now use 10/8/10 games instead of 5) means any
    UI text still saying "last 5 games" for those specific metrics is wrong. Needs an audit of
    `PlayerDetailPage` copy in `frontend/src/App.jsx` against what's actually true post-recalibration.
-3. **No 404/catch-all route.** `frontend/src/App.jsx`'s router (~line 1365) only defines `/`,
+2. **No 404/catch-all route.** `frontend/src/App.jsx`'s router (~line 1365) only defines `/`,
    `/players/:athleteId`, `/matchups`, `/faq` - a typo'd or stale URL currently just renders blank
    instead of a real not-found page.
-4. **Surface the predicted final score on `/matchups`.** `TeamMatchupPredictionService.predictScore`
+3. **Surface the predicted final score on `/matchups`.** `TeamMatchupPredictionService.predictScore`
    already exists and runs live, but the matchups page (`frontend/src/App.jsx` MatchupsPage,
    ~line 1295) only shows the win-confidence percentage, not the predicted score itself - a small,
    low-effort addition using infrastructure that's already there, and a natural stepping stone
    toward the separately-scoped "compare predicted vs. actual score" backtest idea below.
+4. **Multi-picker identity for the picks feature (added 2026-08-31, explicitly deferred by the
+   user - "more complexity than I want to deal with right now," positioned above the bottom-barrel
+   backlog but not top priority).** Right now `user_picks` has no concept of *whose* pick is whose
+   at all - fine while the user is the only one submitting, but a real gap the moment a second
+   person picks games on the same install. Real answer already researched and ready to build
+   whenever this gets picked back up: a session id won't work (resets/expires); the standard
+   no-login pattern is a persistent client-side id generated once and stored in `localStorage` (not
+   `sessionStorage`) - survives across visits on the same browser/device (unlike a session), paired
+   with a simple self-typed display name so picks read as "Alex's picks" rather than anonymous
+   separated tracks. Real, honest limit worth stating up front when this gets built: this identifies
+   a *browser*, not a *verified person* - clearing browser data or switching devices starts a fresh
+   identity, no cross-device linking without real accounts. The existing 16 real Week 1 picks have
+   no identity attached and were explicitly left that way (not backfilled/assigned) - user's own
+   call, since they're the only picker for now.
 5. Priority 6/8 UX and data-completeness backlog (last-X-game trend depth, defensive rank
    calculations) - real, lower-urgency work whenever prediction-quality investigation runs dry.
 6. Secondary/fun (explicitly lower priority than the above, per 2026-08-28 user direction): a real
@@ -123,9 +132,346 @@ prioritized set of next items - not yet built, just scoped and agreed with the u
    anything this app controls), but hasn't been directly observed - worth a quick sanity check
    after the first real 2026-09-09 refresh actually runs, not before.
 
-## Recently Completed
+**Added 2026-08-31** - investigating a user-reported observation ("I haven't seen a QB projected
+to throw over 300 yards, but it's almost a guarantee someone will in week 1") turned up two real,
+connected findings - see Recently Completed for the full numbers:
 
-- (2026-08-30, the actual latest) **`StatsRefreshWorker`'s full ten-script chain run end-to-end for
+7. ~~HIGH VALUE, well-scoped: fix `PredictionSummaryResponse.lowerBound`/`upperBound`~~ **Done
+   (2026-08-31) - see Recently Completed.** UI display explicitly deferred, user's own call: asked
+   directly (range-under-the-number vs. range-as-headline vs. backend-only), chose backend-only for
+   now - the player page still shows one decisive number, unchanged, on purpose.
+8. Bigger, deliberately out of scope for now: the point-estimate *mean* itself is well-calibrated
+   (see Recently Completed - predicted vs. actual passingYards means are nearly identical), so this
+   isn't a coefficient problem. The compressed-variance pattern is a structural property of any
+   trailing-average blend (averaging mechanically reduces variance) and shows up on both the player
+   side (this investigation) and the team-totals side (flagged 2026-08-20/28, never fully solved) -
+   a real, harder problem for a future session if a fuller fix (e.g. an actual distributional/
+   ensemble model) is ever wanted, not something to chase today.
+
+**Cleared as of 2026-08-31 (continued)** - user caught two real, live bugs by actually using the
+app (homepage/profile-page prediction mismatch, missing "upcoming matchup" block) - both
+investigated with real data and fixed the same session. See Recently Completed for the full
+numbers.
+
+**Cleared as of 2026-08-31 (continued again)** - the confidence-interval fix (item 7 above) is
+done too. All three items opened by the same-day spread-compression investigation are now closed.
+
+**Cleared as of 2026-08-31 (continued yet again)** - user asked for the next highest-value free
+(no-paid-data) priority. `RECENT_GAMES_FOR_SCORING` (Priority 5's own still-open item, only ever
+in-sample-compared before) retested with real held-out validation and split into two separately-
+calibrated windows - see Recently Completed. Team-side calibration now has the same rigor the
+player side already got.
+
+**Added 2026-08-31 (new feature, not calibration)** - user asked a real conceptual question ("could
+a person just pick 75% of games") that led to checking the app's own data directly: picking the
+Vegas favorite straight up, every game, already gets 65.98% (3,151 real games) - almost exactly
+matching this session's Elo model and the public-model ceiling already discussed - and 23.9% of
+games are decided by a single score (genuine coin-flip territory). That real check led directly to
+a new, real feature request: **a personal weekly pick-'em tracker**, deliberately independent of
+this app's own prediction model, so the "could I beat 65-70%" question has a real, tracked answer
+instead of an untested self-assessment. Built and shipped same session - see Recently Completed.
+
+1. **Not yet visually verified**: the "already-decided game with a graded pick" rendering path
+   (correct/incorrect color, the result tag) - real 2026 games haven't been played yet, so this
+   couldn't be checked against a real graded game this session. Backend correctness for this exact
+   path IS covered by `UserPickServiceTest`; only the frontend's conditional CSS classes are
+   unverified. Worth a quick visual check once the first real Week 1 games finish (2026-09-09+). The
+   *locked* (kickoff-passed, no score yet) rendering IS now visually verified - see Recently
+   Completed below - this is specifically about the further "and now it's graded" state.
+
+**Added 2026-08-31 (continued)** - two real follow-up questions on the picks feature, both real
+gaps, both fixed same session - see Recently Completed:
+
+2. Resubmitting a week already worked (upsert by game id, not insert-only) - confirmed, no fix
+   needed, just verified the existing behavior answers the question correctly.
+3. **Real gap, now fixed**: nothing stopped submitting a pick for a game whose real kickoff had
+   already passed, only games where a final score had already synced in - which lags real kickoff
+   by however long until the next stats refresh runs. Fixed with a real per-game kickoff timestamp,
+   not just a whole-week cutoff, so a Thursday game locks independently of the rest of its week.
+
+- (2026-08-31, the actual latest) **`ELO_POINTS_PER_MARGIN_POINT` (25.0, the Elo-to-margin
+  conversion factor) retested - a real null, and it closes out the last untested hand-picked
+  constant in the team-matchup model.** This constant is used two different ways -
+  (1) converting `ratingDiff` into `eloPredictedMargin`, an *input* to the already-fit
+  `OFFENSE_DEFENSE_ELO_COEFFICIENT` regression, where changing it is mathematically near-redundant
+  with just rescaling that already-optimized coefficient (a fair, non-circular test would need a
+  full joint refit of the whole 5-term regression per candidate value - a bigger, separate lift,
+  not attempted this pass); (2) converting the *final* `predictedMargin` back into a rating-diff
+  scale for the win-probability logistic formula, downstream of the regression and cleanly
+  testable on its own. Tested (2): real win-probability calibration (not just point-MAE) - Brier
+  score (`mean((predictedProb - actualHomeWin)^2)`) for K in {15, 20, 25, 30, 35, 40, 50}, same 6
+  held-out cutoffs (2018-2023) as every other recalibration. **Real null**: K=25 (current) has the
+  best mean Brier score (0.219983), with K=20 essentially tied (0.220231 - a 4th-decimal-place
+  difference, noise) - the response is genuinely flat near the current value and only degrades
+  meaningfully at the extremes (K=50: 0.233833, clearly worse). Directly confirmed this is real
+  calibration, not just a coincidentally-low score: bucketed predicted-vs-observed win rates for
+  the live K=25 formula track closely across the well-populated buckets (55.3% predicted vs. 54.3%
+  observed; 64.9% vs. 64.7%; 74.7% vs. 71.7%; 84.0% vs. 84.6%) - genuinely well-calibrated
+  confidence, not just a directionally-correct pick. Left untouched.
+
+- (2026-08-31) **Two small picks-page polish items, both user-requested.** (1)
+  The submit button was an unstyled default grey box - there was no shared "primary button" class in
+  this codebase at all, only specific selectors (`.hero-search button`, `.action-row button`,
+  `.back-link`) opted into the real theme gradient; added `.picks-submit-row button` to that same
+  rule rather than inventing a new one. (2) Each game now shows the model's own pick alongside the
+  user's - a small "MODEL" tag on whichever team `TeamMatchupPredictionService` favors, plus a line
+  ("Model: Seattle Seahawks (76%)") that highlights when the user's selection disagrees - fetched
+  from the existing `/api/team-matchups/upcoming` independently of the picks data (matching on
+  `gameId`, not team abbreviation - the picks feature stores nflverse's raw codes while the model
+  endpoint returns ESPN-crosswalked ones, so comparing by which *side* - home or away - each system
+  picked avoids needing a third crosswalk), and fails silently (no model comparison shown, not an
+  error) if that fetch fails - the picks feature stays independent of the model even for this
+  display-only addition. Verified live: real confidence percentages rendered correctly, agree/
+  disagree styling confirmed by selecting an off-model pick. Along the way, confirmed the user had
+  already submitted a real, genuine 16-game Week 1 pick set through the page themselves (all one
+  batch, one timestamp) - left completely untouched; this session's own verification only exercised
+  local/unsaved UI state, never called the submit endpoint during this round.
+
+- (2026-08-31) **Real kickoff-time locking for the picks feature - two real user
+  questions, both real, fixed same session.** (1) Resubmitting a week was already an upsert, not
+  insert-only (confirmed via the existing test coverage, no code change needed - just verified the
+  question against real behavior instead of assuming). (2) **Nothing stopped submitting a pick for
+  a game whose real kickoff had already passed** - the only gate was "does this game have a final
+  score yet," which lags real kickoff by however long until the next stats refresh runs (a
+  Thursday-night game could still be pickable Friday morning if the score hadn't synced in yet).
+  - **Root cause and fix**: `nfl_schedules` only ever stored a date (`gameday`) and a local kickoff
+    time-of-day string (`gametime`, e.g. "20:20") - no combined timestamp existed to lock against.
+    Confirmed directly (2026-08-31) that nflverse's `gametime` is consistently US/Eastern regardless
+    of the actual stadium's timezone (even "09:30" London-game kickoffs are Eastern, not local UK
+    time) - broadcast convention, not an approximation. Added a real `kickoff_at` column
+    (`etl/r/import_schedules.R`, `alter table ... add column if not exists` so it lands on the
+    already-existing table, not just fresh databases), computed by parsing `gameday`+`gametime` as
+    America/New_York and converting to UTC. Backfilled for the real 2025/2026 seasons already in
+    use; verified directly against Postgres (spot-checked 5 real Week 1 games, every one matches
+    its `gameday`+`gametime` exactly).
+  - `UserPickService` now locks a game the moment `now >= kickoffAt`, independent of whether a
+    score exists yet - `submitPicks` silently skips a locked-game submission (same graceful-skip
+    pattern as the existing invalid-team check) rather than erroring, and the response carries a
+    real `locked` field per game so the frontend can disable it pre-emptively. A missing
+    `kickoffAt` fails open (not locked) rather than blocking a real pick over an absent value - a
+    real, but low, ongoing risk now that every current/future game has it populated going forward.
+  - Frontend: `PickGameCard` now disables a game's buttons the moment it's locked, showing a small
+    "Locked" tag distinct from a graded result (a locked game can still be scoreless - in progress,
+    or just finished with no synced score yet) - not conflated with the existing decided/graded
+    styling. The "N of M remaining picks selected" counter now excludes locked games too.
+  - Verified live end-to-end, including a real reject: force-synced the current week, confirmed a
+    real live game's `kickoffAt` matches nflverse exactly, then synthetically backdated one real
+    game's `kickoff_at` to an hour ago (temporarily, restored immediately after) and confirmed (a)
+    the frontend disables both buttons and shows "Locked" (Playwright, screenshot taken), (b) a
+    direct `POST /api/picks` submission for that exact game was silently rejected (no pick
+    recorded) rather than erroring. 2 new backend tests (kickoff-passed rejection with no score yet;
+    per-game lock independence within the same week - a Thursday game locked while Sunday games in
+    the same week stay open). Full suite 107/107 green.
+
+- (2026-08-31) **New feature: a personal weekly pick-'em tracker, deliberately
+  independent of this app's own prediction model - born from checking a real conceptual question
+  against real data (see the rotating list above for the 65.98%-favorite-baseline/23.9%-coin-flip
+  numbers) rather than just answering it from general knowledge.** New `picks` package (own
+  `domain`/`repository`/`service`/`web` split, matching this app's per-feature package convention):
+  - `UserPick` entity (`user_picks` table, Hibernate `ddl-auto: update` creates it - no manual
+    migration needed) stores a game id, season/gameType/week, and which of the two real teams was
+    picked, using nflverse's own raw team codes (matching `NflSchedule` directly) rather than
+    crossing over to the ESPN-sourced `Team` entity - grading only ever needs to compare against
+    `NflSchedule`'s own score columns, so there's no reason to introduce that crosswalk in storage,
+    only at the display layer.
+  - `UserPickService.getCurrentWeek()` finds the real current week (earliest `(season, gameType,
+    week)` with an unplayed game) and returns that week's *full* slate, already-decided games
+    included - not just what's left to pick, so an already-graded Thursday-night pick still shows
+    its result on the same page as Sunday's still-open games.
+  - Accuracy is computed across *every* graded pick ever made, not scoped to one week, and is
+    explicitly null (not 0) when zero picks have been graded yet, so the frontend shows a real
+    "N/A" for a fresh history instead of a misleading 0% - exactly what the user asked for ("for
+    the first week it will be N/A").
+  - Ties (rare in the NFL, but real) are excluded from grading entirely - neither correct nor
+    incorrect, since nobody "won" - rather than unfairly penalizing a pick either way.
+  - `POST /api/picks` upserts (by game id) rather than insert-only, so resubmitting the same week
+    updates existing picks instead of erroring or duplicating - not explicitly requested, but a
+    reasonable, low-risk default for a page built around one submit button.
+  - New `/picks` page (`My Picks` in the nav): real Week 1 2026 games with team logos, click a team
+    to select, a running "N of M remaining picks selected" counter, one submit button. 4 new
+    backend tests (full-week-includes-decided-games, create-then-update upsert semantics, rejects a
+    pick for a team not actually in that game, accuracy correctly excludes ties/ungraded games);
+    full suite 105/105 green. Verified live end-to-end with Playwright: 16 real games rendered with
+    real logos, N/A accuracy banner, selection state, submit round-trip - zero console errors,
+    screenshots taken. Test picks made during verification were cleared from the database
+    afterward so the user's real first week starts clean.
+
+- (2026-08-31) **`RECENT_GAMES_FOR_SCORING` (the team-matchup trailing window
+  for points scored/allowed) retested with real held-out validation and split into two separately-
+  calibrated windows - the same per-purpose specialization already applied to the player-prop
+  windows, now applied to the team side.** Directly parallels the 2026-08-30 player-side
+  `RECENT_GAME_WINDOW` win: this was the one remaining hand-picked constant Priority 5 itself still
+  flagged as only ever compared in-sample (against 4 and 1, 2026-08-20). Directly computed from raw
+  nflverse scores in R (one Elo replay, reused across all candidate windows), holding the already-
+  fit `OFFENSE_DEFENSE_*`/`TOTAL_POINTS_*` regression coefficients fixed and varying only the
+  window feeding their four raw trailing-average inputs, across the same 6 held-out cutoffs
+  (2018-2023) every other recalibration this session used. **Margin/winner-pick accuracy and
+  totals accuracy wanted genuinely different windows** - window 6 beat the old shared 8 on
+  held-out winner-pick accuracy on every single one of the 6 cutoffs (mean 64.49% -> 65.21%);
+  margin MAE itself had no single clean winner across cutoffs (mixed), so window 6 was kept on the
+  strength of the winner-pick result, since that's the metric Priority 5 is actually scored on
+  (63.9% baseline). Window 10 beat 8 on held-out totals MAE on every single one of the 6 cutoffs
+  (mean 10.521 -> 10.494).
+  - **New constants**: `RECENT_GAMES_FOR_MARGIN_SCORING = 6` and `RECENT_GAMES_FOR_TOTALS_SCORING =
+    10` in `UpcomingTeamMatchupService`, replacing the single shared `RECENT_GAMES_FOR_SCORING`
+    (kept, unchanged at 8, but now scoped to only the untouched style-calibration export - style-
+    vs-style matchup awareness was investigated and found to be a real, converging null, so that
+    window was deliberately left alone). `UpcomingTeamMatchupService.buildUpcomingMatchups` and
+    every `TeamMatchupBacktestService` backtest (`runBacktest`, `runSpreadBacktest` - both score the
+    margin prediction, so both use the margin window; `runTotalsBacktest` uses the totals window)
+    now compute their trailing averages with the window matching what they're actually predicting,
+    instead of one value shared across both purposes.
+  - Verified live after a clean restart: `GET /api/backtest/team-matchups` winner accuracy 64.95%
+    (full dataset, consistent with the held-out finding's direction); `GET
+    /api/backtest/team-matchups/totals` MAE 10.4566. 2 new tests (one per service) using an
+    11-prior-game fixture with strictly monotonic scored/allowed values specifically so trailing-6
+    and trailing-10 averages are unambiguously different, hand-verified to 4 decimal places -
+    proving the two windows are genuinely read separately, not accidentally sharing one value.
+    Full suite 101/101 green.
+
+- (2026-08-31) **Fixed `PredictionSummaryResponse.lowerBound`/`upperBound` - the
+  confidence-interval-for-the-mean bug flagged earlier this same session.** `margin` used to be
+  `1.28 * (stdDev / sqrt(sampleSize))`; changed to `1.28 * stdDev * sqrt(1 + 1/sampleSize)` - the
+  standard prediction-interval formula for a new single observation, converging to `1.28 * stdDev`
+  for large samples instead of shrinking toward zero. Same z-score (1.28, ~80%), same simplification
+  already documented (doesn't model the adjustment terms' own uncertainty) - scoped to exactly the
+  n-scaling bug, nothing else touched. Verified live: Josh Allen's passingYards range went from the
+  previously-cited 231.7-248.6 (±8.4, clearly too narrow to be a real single-game range) to
+  139.7-340.6 (±100.5) - and the upper bound now clears 300, directly addressing the user's original
+  observation. Spot-checked 2 more players (Terry McLaurin 18.5-102.6 receivingYards, Derrick Henry
+  49.3-190.5 rushingYards) - all realistic, sensibly scaled to each metric's own variance. New unit
+  test (hand-verified: 3 games of 40/50/60 receivingYards, sample stdDev=10, n=3 -> margin =
+  1.28*10*sqrt(4/3) = 14.780166891254419, asserted to 0.001 precision) - this field had zero test
+  coverage before. Full suite 99/99 green.
+  - **UI explicitly NOT changed this pass - the user's own call, asked directly rather than assumed.**
+    Given a hidden bug fix alone wouldn't change anything the user actually sees (the player page
+    still shows one number either way), and given surfacing this range would reverse an earlier,
+    deliberate product decision (the class doc: "the product decision was to show one decisive
+    number instead of hedging it with a range"), asked how they'd want it displayed if shown at all
+    (range under the number / range as the headline / not at all) rather than picking one. Answer:
+    backend-only for now, no UI change. `PlayerDetailPage` still shows a single decisive number.
+
+- (2026-08-31) **Two real, user-caught bugs found by actually using the app,
+  investigated with real data (not assumed), and fixed same-session.**
+  - **Bug 1: the homepage leaderboard and a player's own page could show different numbers for the
+    same stat.** Live, reproduced example: homepage said Jared Goff was projected for 304.0 passing
+    yards; his own page said 291.5, moments later. Root cause: `PlayerLeaderboardService` (see
+    below) cached the whole computed response, including the projected *value*, for 30 minutes -
+    but `PlayerPredictionService.getPredictionForAthleteId` (which both paths ultimately call) has
+    its own, shorter 20-minute cache, so the two could independently expire and recompute out of
+    sync with each other. Fixed by changing *what's* cached: only the winning athleteId per
+    position (30 min - "who's the overall leader" is genuinely stable enough to cache) is cached, but
+    the actual displayed *value* is always read fresh through `getPredictionForAthleteId` on every
+    request - the exact same call, same cache, a direct page visit would hit, so the two can no
+    longer disagree by construction. Verified live: after the fix, the leaderboard's value for the
+    (then-)current leader (Matthew Stafford, 294.3897677292214) matched his own page's value to the
+    full double precision. 2 new tests directly covering this (a repeated call reflecting a changed
+    mock answer rather than a memoized one; a null-athleteId short-circuit that never calls the
+    prediction service at all).
+  - **Bug 2: the "Upcoming matchup" block wasn't rendering for some players.** User's own hypothesis
+    ("our code looks one week ahead and games don't start for 2 weeks") was on the right track, and
+    checking directly turned up the real, more specific cause: `TeamSyncService`'s ESPN schedule
+    fetch (`?season=2026`, no `seasontype` parameter) silently defaults to **preseason only**
+    (confirmed by calling the real ESPN endpoint directly: 3 events, all `seasonType=1`, all already
+    completed) - it was never pulling the real regular-season schedule at all, which explains why
+    the field only ever held August dates. Once every team's preseason finished, 6 teams (BUF, CAR,
+    DAL, DET, JAX, WSH) had nothing to fall back to and went fully null - directly confirmed via
+    `SELECT upcoming_opponent_team_id FROM teams` showing exactly those 6 as `NULL` and every other
+    team dated in August. Fixed: `EspnTeamClient` now takes an explicit `seasonType` parameter;
+    `TeamSyncService` fetches regular season (2) *and* postseason (3) - deliberately excluding
+    preseason (1) entirely, since an exhibition-game opponent isn't a meaningful "next matchup" for
+    a betting-focused app even when it's technically next on the calendar - and merges events across
+    both fetches (and both backfill years) before picking the earliest real upcoming game, rather
+    than the old one-schedule-overwrites-the-last approach. Verified live: force-synced all 6
+    affected teams (`POST /api/teams/sync/{id}`) and confirmed each now resolves its real Week 1
+    opponent (e.g. Detroit -> New Orleans Saints, Sep 13); confirmed in the actual browser via
+    Playwright that Jared Goff's page now renders the "Upcoming matchup" block with real data
+    instead of being empty. New `TeamSyncServiceTest` (this class had zero test coverage before -
+    a real, previously-untested, now-proven-risky path) verifying the multi-schedule merge finds the
+    right event even when 3 of the 4 season/seasonType fetches return nothing.
+  - Side effect worth noting, not a new bug: fixing Bug 2 changed real opponent-adjustment inputs
+    for every player, which is why Goff's own passingYards projection moved again after the fix
+    (291.5 -> 299.8, now with a real, non-zero, non-preseason-based opponentAdjustment) - expected,
+    correct behavior, not further inconsistency.
+  - Full suite 98/98 green throughout.
+
+- (2026-08-31) **Real "top projected player" leaderboard - a second pass on the
+  homepage "Featured players" section, prompted by the user asking to make the spotlight "the actual
+  top spotlight": the QB actually projected to throw for the most yards, the RB projected to rush for
+  the most, the WR projected to receive for the most - not a curated pick, even one showing real
+  data.** New `PlayerLeaderboardService` (`backend/.../player/service/`): for each of QB/RB/WR,
+  queries real active-roster candidates with a non-thin game sample (`>= 5` games, matching
+  `RECENT_GAME_WINDOW`'s own default - not a new arbitrary number) via a new
+  `PlayerRepository.findActiveCandidatesByPosition` query, calls the exact same
+  `PlayerPredictionService.getPredictionForAthleteId` every player's own page uses (no second,
+  parallel prediction path to drift out of sync), and keeps the max. ~477 real candidates evaluated
+  (90 QB/148 RB/239 WR) - real, not hypothetical, live results: Jared Goff top QB (304.0 projected
+  passing yards), Derrick Henry top RB (119.9 rushing), Puka Nacua top WR (95.0 receiving). New
+  `GET /api/players/leaderboard` endpoint, cached 30 minutes server-side since the full computation
+  takes ~12.6s cold (cached responses: ~4ms) - a real, deliberate cost/freshness tradeoff, not an
+  oversight. `frontend/src/data/featuredPlayers.js` (the curated 3-athlete-ID list from the first
+  pass, three days ago) is now fully deleted - nothing hand-picked left in this section at all.
+  3 new backend tests (max-picking, graceful single-candidate-failure skip, empty-candidate-pool
+  null); full suite 95/95 green. Verified live with Playwright: real leaderboard values rendered
+  correctly, click-to-change-spotlight still works, zero console errors, screenshots taken.
+
+- (2026-08-31) **Investigated a user-reported observation about QB passing-yard projections
+  clustering too low, using real data rather than guessing - found two distinct, real, connected
+  issues, not one.** User's exact framing: "I haven't seen a QB projected to throw over 300 yards
+  but it's almost a guarantee someone will [in] the first week of the sport."
+  - **Checked directly, not assumed**: pulled the passingYards calibration export (4,959 historical
+    backtested games, 2014-2025) and compared the model's own reconstructed predicted-mean
+    distribution against real actual outcomes. **The point-estimate mean is well-calibrated** -
+    predicted mean 218.4 vs. actual mean 216.4, nearly identical, so this is not a systematic
+    under-prediction bug. **But the predicted distribution's spread is severely compressed relative
+    to reality**: predicted stdev 64.1 vs. actual stdev 98.4 (roughly 65% of real spread); predicted
+    max across all 4,959 games is only 369.2 vs. a real max of 525; only 5.8% of predictions clear
+    300 passing yards vs. 18.7% of real games (a real historical rate independently confirmed via a
+    direct DB query: 357/2103 real 2022+ QB starts, 17.0%) - roughly a 3x under-representation of
+    the real tail, and 350+ is a 22x under-representation (0.3% predicted vs. 6.6% real). This is
+    the exact same "compression" pattern already flagged for team-totals predictions earlier this
+    session (2026-08-20/28, "predicted range ~28-64 vs. real range 3-105") - now precisely quantified
+    on the player-prop side too. Mechanically expected: averaging trailing games (the whole point of
+    the recent/season blend) reduces variance by construction, so a point-estimate built this way
+    will always under-represent real game-to-game variance - a structural property of the approach,
+    not a coefficient to recalibrate away.
+  - **Second, more directly fixable finding while investigating the first**: the app already computes
+    a `lowerBound`/`upperBound` range per projection (not currently shown in the UI - the FAQ itself
+    already admits this), but the formula computing it (`margin = 1.28 * stdDev / sqrt(sampleSize)`)
+    is a confidence interval for the player's *true average*, not a prediction interval for one
+    upcoming game - it mechanically shrinks toward zero as more career games accumulate. Confirmed
+    live: Josh Allen (141 games on record) has a real computed range of just 231.7-248.6 passing
+    yards, ±8.4 - far too narrow to be a meaningful "plausible range" for a single game regardless of
+    the variance-compression issue above. Flagged as a real, well-scoped, high-value fix for next
+    session (see the rotating list above) - standard statistics (prediction interval uses
+    `stdDev * sqrt(1+1/n)`, not `stdDev/sqrt(n)`), doesn't touch any already-validated coefficient,
+    and directly addresses the user's real complaint once re-surfaced in the UI. Not fixed this pass
+    - found while answering a different question, scoped and documented rather than squeezed in.
+
+- (2026-08-31) **Homepage "Featured players" section now shows real, live
+  projections instead of 3 hand-written blurbs - the first of the 2026-08-30 UI/UX priority list.**
+  `frontend/src/data/featuredPlayers.js` used to be 3 fully static entries (name/team/position/
+  label/blurb) that never touched the API. Kept the same 3 real players (Josh Allen, Jalen Hurts,
+  Terry McLaurin) as the editorial pick of *who* to feature - that part is a legitimate curatorial
+  choice, not a data-integrity problem - but the file now just holds their real `espnAthleteId`s
+  (keyed by ID, not name, since there's a second stored "Josh Allen" - an Arizona Cardinals center,
+  ESPN ID 17102 - name matching alone would have been ambiguous). `HomePage` fetches each one's real
+  `getPlayer`/`getPlayerPredictions` on mount (`Promise.allSettled`, so one failed/not-yet-stored
+  player doesn't break the section) and builds the card/spotlight content from the actual response -
+  headline stat is just `projections[0]`, which the backend already orders position-appropriately
+  (passingYards first for a QB, etc.), so no duplicate position logic was needed on the frontend.
+  Cards are still clickable to change the spotlight (unchanged UX), and the spotlight now also links
+  through to the real player page (`/players/:athleteId`) via a "View full breakdown" link, which
+  didn't exist before - clicking a featured card previously went nowhere.
+  - Real loading/error/empty states added, matching this app's existing `.loading-spinner`/
+    `.empty-state` conventions elsewhere rather than inventing new ones.
+  - Verified live with Playwright, not just `vite build`: real projections rendered (240 passing
+    yards/Josh Allen, 194/Jalen Hurts, 61 receiving yards/Terry McLaurin, matching what
+    `/api/players/{id}/predictions` actually returns), clicking a card updates the spotlight, the
+    "View full breakdown" link navigates to the correct real player page and that page renders
+    correctly, zero browser console errors. Screenshots taken, not just visually eyeballed once.
+
+- (2026-08-30, before the featured-players work above) **`StatsRefreshWorker`'s full ten-script chain run end-to-end for
   real for the first time - a real bug found and fixed along the way, plus the season-start dry run
   itself.** The chain had only ever been exercised one script at a time via manual `Rscript` calls
   across many sessions; this was the first time all ten ran together, in the real documented order,
@@ -1923,14 +2269,21 @@ Implementation ideas:
     2023-2025 sample) doesn't surface a usable signal; running more variations chasing significance
     would be the exact overfitting trap this priority was scoped to avoid. Revisit once real 2026
     in-season data exists as a genuinely new angle - not as a default next-session task.
-- Consider whether the hand-picked constants (`K_FACTOR = 20`, `HOME_FIELD_ADVANTAGE_ELO = 55`,
-  `ELO_POINTS_PER_MARGIN_POINT = 25`, and - new as of 2026-08-20 -
-  `RECENT_GAMES_FOR_SCORING = 8` for the predicted-total calculation) hold up under real
-  calibration, same open question Priority 2's rotating-list item 4 raises for the player-prop
-  heuristic's own constants. Explicit user-agreed target for this: high-60s to low-70s winner
-  accuracy is a realistic goal to iterate toward; 75%+ sustained is not (see the 2026-08-19
-  discussion - Vegas/FiveThirtyEight-caliber public models top out around 65-70%, and NFL's
-  inherent single-game variance is a structural ceiling, not a modeling gap).
+- ~~Consider whether the hand-picked constants (`K_FACTOR = 20`, `HOME_FIELD_ADVANTAGE_ELO = 55`,
+  `ELO_POINTS_PER_MARGIN_POINT = 25`, and `RECENT_GAMES_FOR_SCORING = 8` for the predicted-total
+  calculation) hold up under real calibration~~ **All four now retested (2026-08-31) - every
+  hand-picked constant in the team-matchup model has had genuine held-out scrutiny.** `K_FACTOR`/
+  `HOME_FIELD_ADVANTAGE_ELO`: real null. `RECENT_GAMES_FOR_SCORING`: real win, split into two
+  separately-calibrated windows. `ELO_POINTS_PER_MARGIN_POINT`: real null, see Recently Completed -
+  tested via real win-probability calibration (Brier score across K in {15,20,25,30,35,40,50}, same
+  6 held-out cutoffs) rather than the margin-regression input (entangled with the already-fit
+  `OFFENSE_DEFENSE_ELO_COEFFICIENT` - a fair test there needs a full joint refit, not attempted).
+  K=25 (current) has the best mean Brier score (0.219983) and is genuinely well-calibrated, not
+  just numerically best by coincidence - real games we call "65% home win" win 64.7% of the time,
+  "84%" games win 84.6% of the time. Explicit user-agreed target for winner accuracy: high-60s to
+  low-70s is a realistic goal to iterate toward; 75%+ sustained is not (see the 2026-08-19 discussion - Vegas/
+  FiveThirtyEight-caliber public models top out around 65-70%, and NFL's inherent single-game
+  variance is a structural ceiling, not a modeling gap).
 - Weekly schedule refresh needed: `import_schedules.R` isn't on any scheduler yet (this session's
   gap - the 2026 season had simply never been imported) - wire it into the existing
   `StatsRefreshWorker` cadence or a similar due-check so next season's schedule (and each week's

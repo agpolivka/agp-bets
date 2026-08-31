@@ -59,6 +59,10 @@ export function getPlayerPredictions(athleteId) {
   return request(`/api/players/${encodeURIComponent(athleteId)}/predictions`);
 }
 
+export function getPlayerLeaderboard() {
+  return request("/api/players/leaderboard");
+}
+
 export function getTeam(teamId) {
   return request(`/api/teams/${encodeURIComponent(teamId)}`);
 }
@@ -81,4 +85,15 @@ export function syncPlayerByAthleteId(athleteId) {
 
 export function getUpcomingTeamMatchups() {
   return request("/api/team-matchups/upcoming");
+}
+
+export function getCurrentWeekPicks() {
+  return request("/api/picks/current-week");
+}
+
+export function submitPicks(picks) {
+  return request("/api/picks", {
+    method: "POST",
+    body: JSON.stringify({ picks }),
+  });
 }

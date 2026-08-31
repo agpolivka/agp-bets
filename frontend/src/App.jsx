@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Link, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { featuredPlayers } from "./data/featuredPlayers";
 import {
+  getCurrentWeekPicks,
   getPlayer,
   getPlayerInsights,
+  getPlayerLeaderboard,
   getPlayerPredictions,
   getTeam,
   getTeamDefenseSummary,
   getUpcomingTeamMatchups,
   searchPlayers,
+  submitPicks,
   syncPlayerByAthleteId,
   syncPlayerStats,
 } from "./lib/api";
@@ -372,6 +374,7 @@ function AppShell({ children }) {
             <Link to="/">Search</Link>
             <a href="#featured">Featured</a>
             <Link to="/matchups">Matchups</Link>
+            <Link to="/picks">My Picks</Link>
             <Link to="/faq">FAQ</Link>
           </nav>
         </div>
@@ -400,6 +403,28 @@ function SearchResultCard({ player }) {
   );
 }
 
+// Shapes one entry of the real leaderboard (see PlayerLeaderboardService - the QB actually
+// projected to throw for the most yards, the RB projected to rush for the most, the WR projected
+// to receive for the most, computed from every real active candidate's live prediction, not a
+// curated pick) into what the featured-player cards show.
+function buildFeaturedPlayer(topPlayer) {
+  if (!topPlayer) {
+    return null;
+  }
+
+  return {
+    athleteId: topPlayer.athleteId,
+    displayName: topPlayer.displayName ?? "Unknown player",
+    teamName: topPlayer.teamName ?? "Unknown team",
+    position: topPlayer.position ?? "Unknown position",
+    headline: {
+      label: predictionMetricMeta(topPlayer.metric).label,
+      value: formatMetricValue(topPlayer.metric, topPlayer.value),
+      unit: predictionMetricMeta(topPlayer.metric).unit,
+    },
+  };
+}
+
 function HomePage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchState, setSearchState] = useState({
@@ -407,7 +432,44 @@ function HomePage() {
     error: null,
     results: [],
   });
-  const [selectedPreview, setSelectedPreview] = useState(featuredPlayers[0]);
+  const [featuredState, setFeaturedState] = useState({ loading: true, error: null, players: [] });
+  const [selectedAthleteId, setSelectedAthleteId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getPlayerLeaderboard()
+      .then((leaderboard) => {
+        if (cancelled) {
+          return;
+        }
+
+        // A position with no real candidate yet (e.g. a fresh database) is skipped rather than
+        // breaking the whole section - same graceful-degradation shape used throughout this app.
+        const players = [leaderboard.topQuarterback, leaderboard.topRusher, leaderboard.topReceiver]
+          .map(buildFeaturedPlayer)
+          .filter(Boolean);
+
+        setFeaturedState({
+          loading: false,
+          error: players.length === 0 ? "Featured players are temporarily unavailable." : null,
+          players,
+        });
+        setSelectedAthleteId((current) => current ?? players[0]?.athleteId ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setFeaturedState({ loading: false, error: error.message, players: [] });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedPreview = featuredState.players.find((player) => player.athleteId === selectedAthleteId) ?? null;
 
   async function onSearch(event) {
     event.preventDefault();
@@ -494,15 +556,32 @@ function HomePage() {
           <aside className="hero-aside">
             <div className="panel-card preview-card">
               <span className="card-label">Featured spotlight</span>
-              <h2>{selectedPreview.name}</h2>
-              <p>
-                {selectedPreview.team} | {selectedPreview.position}
-              </p>
-              <p className="preview-copy">{selectedPreview.blurb}</p>
-              <div className="preview-notes">
-                <span>{selectedPreview.label}</span>
-                <strong>Featured on the board</strong>
-              </div>
+              {featuredState.loading ? (
+                <div className="loading-row">
+                  <span className="loading-spinner" />
+                  <span>Loading live projection...</span>
+                </div>
+              ) : null}
+              {!featuredState.loading && selectedPreview ? (
+                <>
+                  <h2>{selectedPreview.displayName}</h2>
+                  <p>
+                    {selectedPreview.teamName} | {selectedPreview.position}
+                  </p>
+                  <p className="preview-copy">
+                    {selectedPreview.headline
+                      ? `Projected ${selectedPreview.headline.value} ${selectedPreview.headline.label.toLowerCase()} this week.`
+                      : "No live projection available yet for this player."}
+                  </p>
+                  <div className="preview-notes">
+                    <span>Real projection, updated live</span>
+                    <Link to={`/players/${selectedPreview.athleteId}`}>View full breakdown</Link>
+                  </div>
+                </>
+              ) : null}
+              {!featuredState.loading && !selectedPreview ? (
+                <p className="empty-state">{featuredState.error}</p>
+              ) : null}
             </div>
           </aside>
         </section>
@@ -511,33 +590,53 @@ function HomePage() {
           <div className="section-head">
             <div>
               <span className="section-kicker">Featured players</span>
-              <h2>Players worth keeping an eye on</h2>
+              <h2>This week's real top projections</h2>
               <p>
-                These cards give us a place to highlight interesting player situations as the app
-                grows into a stronger betting experience.
+                The QB projected to throw for the most yards, the RB projected to rush for the
+                most, and the WR projected to receive for the most - computed live from every
+                real active player's own projection, not a fixed pick.
               </p>
             </div>
           </div>
 
-          <div className="featured-grid">
-            {featuredPlayers.map((player) => (
-              <button
-                key={player.name}
-                type="button"
-                className="featured-card"
-                onClick={() => setSelectedPreview(player)}
-              >
-                <div className="featured-card-head">
-                  <strong>{player.name}</strong>
-                  <span>{player.label}</span>
-                </div>
-                <p>
-                  {player.team} | {player.position}
-                </p>
-                <small>{player.blurb}</small>
-              </button>
-            ))}
-          </div>
+          {featuredState.loading ? (
+            <div className="empty-state">
+              <div className="loading-row">
+                <span className="loading-spinner" />
+                <span>Loading featured players...</span>
+              </div>
+            </div>
+          ) : null}
+
+          {!featuredState.loading && featuredState.players.length === 0 ? (
+            <p className="empty-state">{featuredState.error}</p>
+          ) : null}
+
+          {!featuredState.loading && featuredState.players.length > 0 ? (
+            <div className="featured-grid">
+              {featuredState.players.map((player) => (
+                <button
+                  key={player.athleteId}
+                  type="button"
+                  className="featured-card"
+                  onClick={() => setSelectedAthleteId(player.athleteId)}
+                >
+                  <div className="featured-card-head">
+                    <strong>{player.displayName}</strong>
+                    <span>{player.headline ? `${player.headline.value} ${player.headline.unit}` : "No projection"}</span>
+                  </div>
+                  <p>
+                    {player.teamName} | {player.position}
+                  </p>
+                  <small>
+                    {player.headline
+                      ? `Projected ${player.headline.value} ${player.headline.unit} (${player.headline.label}) this week.`
+                      : "No live projection available yet."}
+                  </small>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </section>
       </main>
     </AppShell>
@@ -1362,6 +1461,250 @@ function MatchupsPage() {
   );
 }
 
+function PicksAccuracyBanner({ accuracy }) {
+  const hasGraded = accuracy && accuracy.gradedPicks > 0;
+  return (
+    <div className="picks-accuracy-banner">
+      <span className="card-label">Your record</span>
+      <strong>{hasGraded ? `${accuracy.correctPicks}-${accuracy.gradedPicks - accuracy.correctPicks}` : "N/A"}</strong>
+      <span className="subtle">
+        {hasGraded ? `${accuracy.accuracyPct.toFixed(1)}% straight up (${accuracy.gradedPicks} graded picks)` : "No graded picks yet"}
+      </span>
+    </div>
+  );
+}
+
+function PickGameCard({ game, selectedTeam, onSelect, modelPick }) {
+  const isDecided = game.homeScore !== null && game.awayScore !== null;
+  // locked (real kickoff has passed) can be true before isDecided (a final score can take a while
+  // to sync in) - buttons disable at kickoff either way, not only once a score exists.
+  const isLocked = game.locked || isDecided;
+  const modelPickedTeam =
+    modelPick && !modelPick.isTie ? (modelPick.isHomePick ? game.homeTeamAbbreviation : game.awayTeamAbbreviation) : null;
+  const agreesWithModel = selectedTeam && modelPickedTeam && selectedTeam === modelPickedTeam;
+  const disagreesWithModel = selectedTeam && modelPickedTeam && selectedTeam !== modelPickedTeam;
+
+  function teamButtonClass(teamAbbreviation) {
+    const isSelected = selectedTeam === teamAbbreviation;
+    if (!isLocked) {
+      return `pick-team-button${isSelected ? " pick-team-button-selected" : ""}`;
+    }
+    if (!isSelected) {
+      return "pick-team-button pick-team-button-decided";
+    }
+    if (!isDecided || game.correct === null) {
+      return "pick-team-button pick-team-button-selected pick-team-button-decided";
+    }
+    return `pick-team-button pick-team-button-selected pick-team-button-decided ${
+      game.correct ? "pick-team-button-correct" : "pick-team-button-incorrect"
+    }`;
+  }
+
+  function teamButtonTag(teamAbbreviation) {
+    return modelPickedTeam === teamAbbreviation ? <span className="pick-model-tag">Model</span> : null;
+  }
+
+  return (
+    <article className="pick-game-card">
+      <div className="pick-game-date">
+        {formatShortDate(game.gameday)}
+        {isLocked && !isDecided ? <span className="pick-locked-tag">Locked</span> : null}
+      </div>
+      <div className="pick-game-teams">
+        <button
+          type="button"
+          className={teamButtonClass(game.awayTeamAbbreviation)}
+          disabled={isLocked}
+          onClick={() => onSelect(game.gameId, game.awayTeamAbbreviation)}
+        >
+          {game.awayTeamLogoUrl ? <img src={game.awayTeamLogoUrl} alt="" className="team-logo pick-team-logo" /> : null}
+          <span>{game.awayTeamName}</span>
+          {teamButtonTag(game.awayTeamAbbreviation)}
+          {isDecided ? <strong>{game.awayScore}</strong> : null}
+        </button>
+        <span className="team-matchup-at">@</span>
+        <button
+          type="button"
+          className={teamButtonClass(game.homeTeamAbbreviation)}
+          disabled={isLocked}
+          onClick={() => onSelect(game.gameId, game.homeTeamAbbreviation)}
+        >
+          {game.homeTeamLogoUrl ? <img src={game.homeTeamLogoUrl} alt="" className="team-logo pick-team-logo" /> : null}
+          <span>{game.homeTeamName}</span>
+          {teamButtonTag(game.homeTeamAbbreviation)}
+          {isDecided ? <strong>{game.homeScore}</strong> : null}
+        </button>
+      </div>
+      {isDecided && game.correct !== null ? (
+        <span className={`pick-result-tag ${game.correct ? "pick-result-correct" : "pick-result-incorrect"}`}>
+          {game.correct ? "Correct" : "Missed"}
+        </span>
+      ) : null}
+      {modelPick && modelPick.isTie ? <div className="pick-model-line">Model: predicted tie</div> : null}
+      {modelPick && !modelPick.isTie && agreesWithModel ? <div className="pick-model-line pick-model-line-agrees">Model agrees</div> : null}
+      {modelPick && !modelPick.isTie && disagreesWithModel ? (
+        <div className="pick-model-line pick-model-line-disagrees">Model disagrees</div>
+      ) : null}
+    </article>
+  );
+}
+
+function PicksPage() {
+  const [state, setState] = useState({ loading: true, error: null, season: null, gameType: null, week: null, games: [], accuracy: null });
+  const [selections, setSelections] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitMessage, setSubmitMessage] = useState(null);
+  const [modelPicksByGameId, setModelPicksByGameId] = useState({});
+
+  function applyResponse(data) {
+    setState({
+      loading: false,
+      error: null,
+      season: data.season,
+      gameType: data.gameType,
+      week: data.week,
+      games: data.games ?? [],
+      accuracy: data.accuracy,
+    });
+    const existing = {};
+    for (const game of data.games ?? []) {
+      if (game.pickedTeamAbbreviation) {
+        existing[game.gameId] = game.pickedTeamAbbreviation;
+      }
+    }
+    setSelections(existing);
+  }
+
+  useEffect(() => {
+    let canceled = false;
+    getCurrentWeekPicks()
+      .then((data) => {
+        if (!canceled) {
+          applyResponse(data);
+        }
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setState((current) => ({ ...current, loading: false, error: error.message ?? "Could not load this week's games." }));
+        }
+      });
+
+    // Fetched independently, deliberately not blocking the picks page on failure - the model's
+    // pick is a "nice to have" comparison here, not something this feature depends on (see
+    // UserPick's own doc: this whole page is intentionally independent of the prediction model).
+    getUpcomingTeamMatchups()
+      .then((matchups) => {
+        if (canceled) {
+          return;
+        }
+        const byGameId = {};
+        for (const matchup of matchups ?? []) {
+          byGameId[matchup.gameId] = matchup.predictedTie
+            ? { isTie: true }
+            : { isTie: false, isHomePick: matchup.predictedWinnerAbbreviation === matchup.homeTeamAbbreviation };
+        }
+        setModelPicksByGameId(byGameId);
+      })
+      .catch(() => {
+        // Silently leave modelPicksByGameId empty - PickGameCard already treats a missing entry as
+        // "no model comparison available for this game" rather than an error state.
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  function onSelect(gameId, teamAbbreviation) {
+    setSelections((current) => ({ ...current, [gameId]: teamAbbreviation }));
+    setSubmitMessage(null);
+  }
+
+  async function onSubmit() {
+    const picks = Object.entries(selections).map(([gameId, pickedTeamAbbreviation]) => ({ gameId, pickedTeamAbbreviation }));
+    if (picks.length === 0) {
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitMessage(null);
+    try {
+      const data = await submitPicks(picks);
+      applyResponse(data);
+      setSubmitMessage("Picks saved.");
+    } catch (error) {
+      setSubmitMessage(error.message ?? "Could not save picks.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // "Remaining" means still pickable - a game whose kickoff has passed no longer counts even if a
+  // final score hasn't synced in yet, matching PickGameCard's own lock logic.
+  const pickableCount = state.games.filter((game) => !game.locked).length;
+  const selectedPickableCount = state.games.filter((game) => !game.locked && selections[game.gameId]).length;
+
+  return (
+    <AppShell>
+      <main className="content">
+        <section className="panel section">
+          <Link className="back-link" to="/">
+            Back to search
+          </Link>
+          <div className="section-head">
+            <div>
+              <span className="section-kicker">My picks</span>
+              <h2>{state.week ? `Week ${state.week}, ${state.season}` : "This week's games"}</h2>
+              <p>Pick a winner for each game, then submit. Miss a week and it just won't count toward your record.</p>
+            </div>
+          </div>
+
+          {state.accuracy ? <PicksAccuracyBanner accuracy={state.accuracy} /> : null}
+
+          {state.loading ? (
+            <div className="empty-state">
+              <div className="loading-row">
+                <span className="loading-spinner" />
+                <span>Loading this week's games...</span>
+              </div>
+            </div>
+          ) : null}
+          {state.error ? <p className="inline-error">{state.error}</p> : null}
+          {!state.loading && !state.error && state.games.length === 0 ? (
+            <p className="empty-state">No games on file for an upcoming week yet.</p>
+          ) : null}
+
+          {!state.loading && state.games.length > 0 ? (
+            <>
+              <div className="picks-grid">
+                {state.games.map((game) => (
+                  <PickGameCard
+                    key={game.gameId}
+                    game={game}
+                    selectedTeam={selections[game.gameId]}
+                    onSelect={onSelect}
+                    modelPick={modelPicksByGameId[game.gameId]}
+                  />
+                ))}
+              </div>
+
+              <div className="picks-submit-row">
+                <span className="subtle">
+                  {selectedPickableCount} of {pickableCount} remaining picks selected
+                </span>
+                <button type="button" onClick={onSubmit} disabled={submitting || Object.keys(selections).length === 0}>
+                  {submitting ? "Saving..." : "Submit picks"}
+                </button>
+                {submitMessage ? <span className="subtle">{submitMessage}</span> : null}
+              </div>
+            </>
+          ) : null}
+        </section>
+      </main>
+    </AppShell>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -1369,6 +1712,7 @@ function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/players/:athleteId" element={<PlayerDetailPage />} />
         <Route path="/matchups" element={<MatchupsPage />} />
+        <Route path="/picks" element={<PicksPage />} />
         <Route path="/faq" element={<FaqPage />} />
       </Routes>
     </BrowserRouter>

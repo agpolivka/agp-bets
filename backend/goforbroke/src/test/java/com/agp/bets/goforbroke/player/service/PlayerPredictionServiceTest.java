@@ -167,6 +167,32 @@ class PlayerPredictionServiceTest {
   }
 
   @Test
+  void buildProjectionsLowerAndUpperBoundUseAPredictionIntervalNotAConfidenceIntervalForTheMean() {
+    // 2026-08-31 real bug fix: the old formula (1.28 * stdDev / sqrt(n)) is a confidence interval
+    // for the player's true average, not a prediction interval for one upcoming game - it shrinks
+    // toward zero as more games accumulate instead of converging to stdDev. 3 games of
+    // receivingYards (40, 50, 60): mean=50, sample stdDev=10 (variance=((40-50)^2+(60-50)^2)/(3-1)
+    // = 200/2 = 100). margin = 1.28 * 10 * sqrt(1 + 1/3) = 12.8 * sqrt(4/3) = 14.780166891254419.
+    List<PlayerGameStat> allStats =
+        List.of(receivingGame("2026-09-01", 40), receivingGame("2026-08-25", 50), receivingGame("2026-08-18", 60));
+
+    PredictionSummaryResponse projection =
+        service.buildProjection(
+            "receivingYards",
+            allStats,
+            allStats,
+            "WR",
+            List.of(),
+            new PlayerPredictionService.LeagueDefenseAverages(0, 0, 0, 0, 0, 0, 0, 0, 0),
+            new PlayerPredictionService.GameConditions("dome", null, null),
+            null);
+
+    assertEquals(50.0d, projection.mean(), 0.001d);
+    assertEquals(35.21983d, projection.lowerBound(), 0.001d);
+    assertEquals(64.78017d, projection.upperBound(), 0.001d);
+  }
+
+  @Test
   void metricsForPositionReturnsNoProjectionsForKnownNonSkillPositions() {
     assertEquals(List.of(), service.metricsForPosition("K"));
     assertEquals(List.of(), service.metricsForPosition("OL"));

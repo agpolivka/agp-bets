@@ -443,16 +443,26 @@ public class PlayerPredictionService {
                     + targetShareAdjustment)
                 * injuryStatusMultiplier);
 
-    // Not surfaced in the UI today (see class doc) but kept for API consumers / future use.
-    // stdDev uses the full season sample (not just the recent window) since 5 games is too few
-    // to estimate variance from on its own. margin uses a z-score of 1.28, i.e. roughly an 80%
-    // interval around projectedMean under a normal approximation - a simplification, since the
-    // interval doesn't account for the opponent/conditions adjustments' own uncertainty. Also
+    // Real bug, fixed 2026-08-31: this used to be `1.28 * (stdDev / sqrt(sampleSize))` - the
+    // standard-error-of-the-mean formula, i.e. a confidence interval for "how confident are we in
+    // this player's true long-run average," not a prediction interval for "what's a plausible
+    // range for their NEXT single game" (what this field is actually used for, and what the range
+    // display re-added to the UI this same session implies). That formula mechanically shrinks
+    // toward zero as more career games accumulate - a real, live example caught before this fix:
+    // Josh Allen (141 games on record) had a computed range of just 231.7-248.6 passing yards,
+    // ±8.4, nowhere near wide enough to be a meaningful single-game range regardless of how many
+    // games inform the point estimate. The correct standard formula for a new-observation
+    // prediction interval is `stdDev * sqrt(1 + 1/n)` (converges to plain stdDev for large n,
+    // rather than shrinking to 0) - stdDev uses the full season sample (not just the recent
+    // window) since 5 games is too few to estimate variance from on its own. Keeps the same z-score
+    // (1.28, roughly an 80% interval under a normal approximation) and the same simplification
+    // noted before (doesn't account for the opponent/conditions adjustments' own uncertainty) -
+    // this fix is scoped to the n-scaling bug only, not a broader uncertainty-model rework. Also
     // scaled by injuryStatusMultiplier so a likely-out player's interval shrinks toward zero along
     // with the mean, instead of implying they might play after all.
     double stdDev = standardDeviation(allValues);
     int sampleSize = Math.max(1, allValues.size());
-    double margin = 1.28d * (stdDev / Math.sqrt(sampleSize)) * injuryStatusMultiplier;
+    double margin = 1.28d * stdDev * Math.sqrt(1.0d + 1.0d / sampleSize) * injuryStatusMultiplier;
     double lower = Math.max(0.0d, projectedMean - margin);
     double upper = projectedMean + margin;
 

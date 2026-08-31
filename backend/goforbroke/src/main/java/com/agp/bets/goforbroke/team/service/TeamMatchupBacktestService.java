@@ -89,13 +89,20 @@ public class TeamMatchupBacktestService {
 
       // Real-calibrated offense/defense terms (2026-08-28) - see
       // TeamMatchupPredictionService.OFFENSE_DEFENSE_INTERCEPT's doc. Null (a team's first game on
-      // record) falls back to pure Elo automatically inside predict().
+      // record) falls back to pure Elo automatically inside predict(). Window (2026-08-31): see
+      // UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING's doc.
       Double homeRecentScored =
-          recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+          recentAverage(
+              gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
       Double homeRecentAllowed =
-          recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed);
+          recentAverage(
+              gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
       Double awayRecentScored =
-          recentAverage(gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+          recentAverage(
+              gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
 
       TeamMatchupPredictionService.MatchupPrediction prediction =
           predictionService.predict(
@@ -190,14 +197,23 @@ public class TeamMatchupBacktestService {
       if (realTotalLine != null) {
         predictedTotal = realTotalLine;
       } else {
+        // Window (2026-08-31): see UpcomingTeamMatchupService.RECENT_GAMES_FOR_TOTALS_SCORING's doc.
         Double homeScoredAvg =
-            recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+            recentAverage(
+                gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+                UpcomingTeamMatchupService.RECENT_GAMES_FOR_TOTALS_SCORING);
         Double homeAllowedAvg =
-            recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed);
+            recentAverage(
+                gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed,
+                UpcomingTeamMatchupService.RECENT_GAMES_FOR_TOTALS_SCORING);
         Double awayScoredAvg =
-            recentAverage(gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+            recentAverage(
+                gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+                UpcomingTeamMatchupService.RECENT_GAMES_FOR_TOTALS_SCORING);
         Double awayAllowedAvg =
-            recentAverage(gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed);
+            recentAverage(
+                gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed,
+                UpcomingTeamMatchupService.RECENT_GAMES_FOR_TOTALS_SCORING);
         if (homeScoredAvg == null || homeAllowedAvg == null || awayScoredAvg == null || awayAllowedAvg == null) {
           continue;
         }
@@ -295,12 +311,20 @@ public class TeamMatchupBacktestService {
       }
 
       double vegasImpliedHomeMargin = spreadLine;
+      // Window (2026-08-31): this scores the same margin prediction as runBacktest above, so it
+      // uses the same margin-specific window - see RECENT_GAMES_FOR_MARGIN_SCORING's doc.
       Double homeRecentScored =
-          recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+          recentAverage(
+              gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
       Double homeRecentAllowed =
-          recentAverage(gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed);
+          recentAverage(
+              gamesByTeamId.get(homeRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsAllowed,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
       Double awayRecentScored =
-          recentAverage(gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored);
+          recentAverage(
+              gamesByTeamId.get(awayRow.getTeam().getId()), homeRow.getGameDate(), TeamStrengthRating::getPointsScored,
+              UpcomingTeamMatchupService.RECENT_GAMES_FOR_MARGIN_SCORING);
       TeamMatchupPredictionService.MatchupPrediction prediction =
           predictionService.predict(
               homeRow.getRatingBefore(), awayRow.getRatingBefore(), homeRecentScored, homeRecentAllowed, awayRecentScored);
@@ -493,7 +517,7 @@ public class TeamMatchupBacktestService {
 
   /** Only counts games strictly before {@code beforeDate} - the same point-in-time rule the whole session's other backtests use. */
   private Double recentAverage(
-      List<TeamStrengthRating> teamGames, LocalDate beforeDate, ToIntFunction<TeamStrengthRating> accessor) {
+      List<TeamStrengthRating> teamGames, LocalDate beforeDate, ToIntFunction<TeamStrengthRating> accessor, int window) {
     if (teamGames == null) {
       return null;
     }
@@ -502,7 +526,7 @@ public class TeamMatchupBacktestService {
         teamGames.stream()
             .filter(game -> game.getGameDate().isBefore(beforeDate))
             .sorted(Comparator.comparing(TeamStrengthRating::getGameDate).reversed())
-            .limit(UpcomingTeamMatchupService.RECENT_GAMES_FOR_SCORING)
+            .limit(window)
             .toList();
 
     return recent.isEmpty() ? null : recent.stream().mapToInt(accessor).average().orElse(Double.NaN);

@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Instant;
 import java.time.LocalDate;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -40,6 +41,14 @@ public class NflSchedule {
   private Integer week;
 
   private LocalDate gameday;
+
+  // Real combined kickoff instant (gameday + nflverse's own local kickoff time-of-day, parsed as
+  // US/Eastern - see import_schedules.R's doc for why that timezone is correct even for games
+  // played elsewhere). Added 2026-08-31 for the picks feature - locking a pick at real kickoff
+  // needs more precision than the date-only gameday column, since two games in the same week (e.g.
+  // Thursday night vs. Sunday) need to lock independently of each other.
+  @Column(name = "kickoff_at")
+  private Instant kickoffAt;
 
   // nflverse's raw team code (e.g. "LA", "OAK") - crosswalk via NflverseTeamAbbreviations before
   // looking up against Team.abbreviation.
