@@ -210,7 +210,13 @@ public class PredictionBacktestService {
               continue;
             }
 
-            List<Double> recentValues = predictionService.metricValues(recentStats, metric);
+            // Uses the same per-metric window buildProjection itself uses (see
+            // PlayerPredictionService#recentGameWindowFor's doc) rather than the passed-in
+            // recentStats, so this export stays consistent with what's actually driving the live
+            // projection for receivingYards/passingTouchdowns/turnovers.
+            List<Double> recentValues =
+                predictionService.metricValues(
+                    allStats.stream().limit(PlayerPredictionService.recentGameWindowFor(metric)).toList(), metric);
             List<Double> allValues = predictionService.metricValues(allStats, metric);
             double recentAverage = average(recentValues);
             double seasonAverage = average(allValues);

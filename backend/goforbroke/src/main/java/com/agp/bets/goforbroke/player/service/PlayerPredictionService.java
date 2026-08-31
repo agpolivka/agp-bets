@@ -72,6 +72,26 @@ public class PlayerPredictionService {
   // constants/helpers below so the backtest scores against the exact same math the live path uses,
   // instead of risking a second, drifting copy of the algorithm.
   static final int RECENT_GAME_WINDOW = 5;
+  // Real-calibrated (2026-08-30): the window length itself was never tested against alternatives
+  // until now, unlike every coefficient around it. Directly evaluated (no fitting needed - window
+  // length is a discrete menu choice, not a regression coefficient) held-out MAE for windows
+  // {3, 5, 8, 10} across the same 6 temporal cutoffs (2018-2023) used throughout this file's other
+  // recalibrations. Three metrics showed a real, replicated win - the SAME window beat the default
+  // 5 on every single one of the 6 cutoffs, not just on average: receivingYards (10, +0.6% to +1.6%
+  // MAE), passingTouchdowns (8, +0.6% to +1.9%), turnovers (10, +0.9% to +2.1%). rushingYards/
+  // receptions/touchdowns were already optimal at 5. passingYards leaned toward a smaller window (3)
+  // but only won 5 of 6 cutoffs (lost at the 2020 cutoff) - not clean enough to trust by this file's
+  // own bar, left at the default. See WORKPLAN.md for the full per-cutoff numbers.
+  private static final java.util.Map<String, Integer> RECENT_GAME_WINDOW_BY_METRIC =
+      java.util.Map.of("receivingYards", 10, "passingTouchdowns", 8, "turnovers", 10);
+
+  // Package-private so PredictionBacktestService's CalibrationRow export computes recentAverage
+  // with the exact same per-metric window buildProjection actually uses below, instead of the
+  // export silently drifting back to the old fixed 5-game window for the 3 metrics that no longer
+  // use it.
+  static int recentGameWindowFor(String metric) {
+    return RECENT_GAME_WINDOW_BY_METRIC.getOrDefault(metric, RECENT_GAME_WINDOW);
+  }
   // Roughly one season (18 regular-season weeks + a playoff buffer) of an opponent's most recent
   // defensive games. Without this, opponentAdjustment blends every stored season together, so a
   // team's 2020 defense weighs exactly as much as their current one - capping to a recent window
@@ -372,9 +392,14 @@ public class PlayerPredictionService {
   /**
    * Core projection for one stat (e.g. "rushingYards"). See the class doc for the algorithm in
    * prose; {@code blendedMean} is the 65/35 recent/season split, {@code opponentAdjustment}
-   * nudges it toward how the upcoming opponent's defense has performed. The 0.65/0.35 split is
-   * arbitrary (weights recent form higher without letting a small 5-game sample dominate) and
-   * not derived from any backtest.
+   * nudges it toward how the upcoming opponent's defense has performed. The 0.65/0.35 weighting
+   * itself was retested per-metric with a real held-out train/test split (2026-08-28) and held up -
+   * every metric's fitted alternative lost on every cutoff, so the global split stays. The recent-
+   * game window length feeding {@code recentValues} is a separate, since-validated question (see
+   * {@link #RECENT_GAME_WINDOW_BY_METRIC}'s doc) - it's pulled from {@code allStats} (the full
+   * point-in-time-correct history) rather than the passed-in {@code recentStats}, which stays fixed
+   * at {@link #RECENT_GAME_WINDOW} for the other adjustment methods below that were calibrated
+   * against that specific window and shouldn't silently see a different one.
    *
    * <p>{@code gameStatus} (see {@link #injuryStatusMultiplier}) is applied last, as a scale on the
    * whole summed projection rather than another additive term - see that method's doc for why.
@@ -388,7 +413,7 @@ public class PlayerPredictionService {
       LeagueDefenseAverages leagueAverages,
       GameConditions conditions,
       String gameStatus) {
-    List<Double> recentValues = metricValues(recentStats, metric);
+    List<Double> recentValues = metricValues(allStats.stream().limit(recentGameWindowFor(metric)).toList(), metric);
     List<Double> allValues = metricValues(allStats, metric);
 
     double recentAverage = recentValues.isEmpty() ? 0.0d : recentValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0d);

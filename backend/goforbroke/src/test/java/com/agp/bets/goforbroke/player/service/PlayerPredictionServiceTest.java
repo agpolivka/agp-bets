@@ -120,6 +120,53 @@ class PlayerPredictionServiceTest {
   }
 
   @Test
+  void recentGameWindowForReturnsTheRealCalibratedPerMetricOverrides() {
+    // 2026-08-30: window length retested per metric with a real held-out train/test split (same 6
+    // cutoffs as every other recalibration in this file) - these three metrics won on every single
+    // cutoff with a wider window, everything else stays at the default 5 - see the doc on
+    // RECENT_GAME_WINDOW_BY_METRIC.
+    assertEquals(10, service.recentGameWindowFor("receivingYards"));
+    assertEquals(8, service.recentGameWindowFor("passingTouchdowns"));
+    assertEquals(10, service.recentGameWindowFor("turnovers"));
+    assertEquals(5, service.recentGameWindowFor("rushingYards"));
+    assertEquals(5, service.recentGameWindowFor("receptions"));
+    assertEquals(5, service.recentGameWindowFor("touchdowns"));
+    assertEquals(5, service.recentGameWindowFor("passingYards"));
+  }
+
+  @Test
+  void buildProjectionUsesTheWiderRealCalibratedWindowForReceivingYardsNotThePassedInRecentStats() {
+    // 12-game career, most-recent-first, matching how allStats is always ordered in this file.
+    List<PlayerGameStat> allStats =
+        List.of(
+            receivingGame("2026-09-01", 100), receivingGame("2026-08-25", 90), receivingGame("2026-08-18", 80),
+            receivingGame("2026-08-11", 70), receivingGame("2026-08-04", 60), receivingGame("2026-07-28", 50),
+            receivingGame("2026-07-21", 40), receivingGame("2026-07-14", 30), receivingGame("2026-07-07", 20),
+            receivingGame("2026-06-30", 10), receivingGame("2026-06-23", 5), receivingGame("2026-06-16", 5));
+    // The old fixed 5-game recentStats, passed through unused for this metric now - deliberately
+    // different from allStats' own 10-game prefix, so a passing test proves buildProjection really
+    // is reading the wider window from allStats and not silently falling back to this list.
+    List<PlayerGameStat> recentStats = allStats.subList(0, 5);
+
+    PredictionSummaryResponse projection =
+        service.buildProjection(
+            "receivingYards",
+            recentStats,
+            allStats,
+            "WR",
+            List.of(),
+            new PlayerPredictionService.LeagueDefenseAverages(0, 0, 0, 0, 0, 0, 0, 0, 0),
+            new PlayerPredictionService.GameConditions("dome", null, null),
+            null);
+
+    // recentAverage (window=10) = mean(100,90,80,70,60,50,40,30,20,10) = 55; seasonAverage (full
+    // 12) = mean(...,5,5) = 46.66667. blendedMean = 0.65*55 + 0.35*46.66667 = 52.08333. Every other
+    // adjustment is 0 (no defense history, dome/no wind/no total line, no advanced-stat fields set
+    // on these fixtures) so this is the whole projection.
+    assertEquals(52.08333d, projection.mean(), 0.001d);
+  }
+
+  @Test
   void metricsForPositionReturnsNoProjectionsForKnownNonSkillPositions() {
     assertEquals(List.of(), service.metricsForPosition("K"));
     assertEquals(List.of(), service.metricsForPosition("OL"));
@@ -245,6 +292,13 @@ class PlayerPredictionServiceTest {
     PlayerGameStat stat = new PlayerGameStat();
     stat.setGameDate(LocalDate.parse(gameDate));
     stat.setRushingYards(rushingYards);
+    return stat;
+  }
+
+  private PlayerGameStat receivingGame(String gameDate, int receivingYards) {
+    PlayerGameStat stat = new PlayerGameStat();
+    stat.setGameDate(LocalDate.parse(gameDate));
+    stat.setReceivingYards(receivingYards);
     return stat;
   }
 

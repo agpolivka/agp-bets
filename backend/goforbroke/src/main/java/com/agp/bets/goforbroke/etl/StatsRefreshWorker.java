@@ -61,23 +61,63 @@ public class StatsRefreshWorker {
 
     try {
       if (statsRefreshDueChecker.isRefreshDue()) {
-        rScriptRunner.run(SCHEDULES_SCRIPT_NAME);
-        rScriptRunner.run(PLAYER_STATS_SCRIPT_NAME);
-        rScriptRunner.run(TEAM_DEFENSE_SCRIPT_NAME);
-        rScriptRunner.run(TEAM_OFFENSE_SCRIPT_NAME);
-        rScriptRunner.run(PFR_ADVANCED_RUSHING_SCRIPT_NAME);
-        rScriptRunner.run(NEXTGEN_STATS_SCRIPT_NAME);
-        rScriptRunner.run(SNAP_COUNTS_SCRIPT_NAME);
-        rScriptRunner.run(PFR_ADVANCED_DEFENSE_SCRIPT_NAME);
-        rScriptRunner.run(PARTICIPATION_DEFENSE_SCRIPT_NAME);
-        rScriptRunner.run(TEAM_STRENGTH_RATINGS_SCRIPT_NAME);
+        runChain();
       } else {
         log.debug("Stats refresh not due; skipping.");
       }
+    } catch (RuntimeException exception) {
+      // @Async methods run on their own thread - nothing else observes this CompletableFuture (see
+      // StatsRefreshScheduler, which fires-and-forgets it), so an uncaught exception here would
+      // otherwise vanish into the future instead of ever reaching a log.
+      log.error("Unexpected failure during stats refresh chain", exception);
     } finally {
       refreshInFlight.set(false);
     }
 
     return CompletableFuture.completedFuture(null);
+  }
+
+  // 2026-08-30: found while doing the season-start dry run that the chain used to fire all ten
+  // scripts unconditionally, never checking any of their boolean return values - a failed
+  // import_schedules.R (which player stats' schedule join and the Elo recompute both depend on per
+  // the class doc) would silently let the rest of the chain run against stale schedule data, with
+  // nothing beyond RScriptRunner's own per-script error log to notice. Now: abort the whole chain
+  // if the schedules import itself fails (the one hard, documented prerequisite), but let the
+  // remaining nine keep running independently on any other single failure (they're largely
+  // independent enrichments - a snap-counts hiccup shouldn't block the Elo recompute) - and always
+  // log one clear summary of what actually happened, instead of only ever seeing per-script logs.
+  private void runChain() {
+    if (!rScriptRunner.run(SCHEDULES_SCRIPT_NAME)) {
+      log.error(
+          "Stats refresh aborted: {} failed, and everything else in the chain depends on it being"
+              + " fresh - see RScriptRunner's own error log above for the real cause.",
+          SCHEDULES_SCRIPT_NAME);
+      return;
+    }
+
+    java.util.List<String> remaining =
+        java.util.List.of(
+            PLAYER_STATS_SCRIPT_NAME,
+            TEAM_DEFENSE_SCRIPT_NAME,
+            TEAM_OFFENSE_SCRIPT_NAME,
+            PFR_ADVANCED_RUSHING_SCRIPT_NAME,
+            NEXTGEN_STATS_SCRIPT_NAME,
+            SNAP_COUNTS_SCRIPT_NAME,
+            PFR_ADVANCED_DEFENSE_SCRIPT_NAME,
+            PARTICIPATION_DEFENSE_SCRIPT_NAME,
+            TEAM_STRENGTH_RATINGS_SCRIPT_NAME);
+
+    java.util.List<String> failed = new java.util.ArrayList<>();
+    for (String scriptName : remaining) {
+      if (!rScriptRunner.run(scriptName)) {
+        failed.add(scriptName);
+      }
+    }
+
+    if (failed.isEmpty()) {
+      log.info("Stats refresh chain completed: all 10 scripts succeeded.");
+    } else {
+      log.error("Stats refresh chain completed with {} failure(s): {}", failed.size(), failed);
+    }
   }
 }

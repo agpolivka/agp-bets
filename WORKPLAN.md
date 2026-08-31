@@ -80,23 +80,119 @@ come back genuine, replicated nulls - every previously-flagged "worth retesting"
 resolved. That's a meaningful checkpoint: the low-hanging recalibration fruit from this session's
 methodology upgrade looks exhausted, not just unexplored. Remaining open items:
 
-1. **`RECENT_GAME_WINDOW` (player-prop trailing window, currently 5 games)** - never tested against
-   alternatives at all, unlike the team side's `RECENT_GAMES_FOR_SCORING` (8 games, at least
-   in-sample-compared against 4/1 previously). A real, well-motivated, not-yet-touched candidate for
-   the same held-out methodology if more calibration work is wanted before moving on.
-2. **`StatsRefreshWorker` end-to-end dry run** - ten scripts now, added incrementally over many
-   sessions, never exercised as one real unit (only ever run individually via manual `Rscript`
-   calls). Season starts 2026-09-09 - worth a real check before it's live for real.
-3. Priority 6/8 UX and data-completeness backlog (last-X-game trend depth, defensive rank
+**Cleared as of 2026-08-30** - `RECENT_GAME_WINDOW` retested against alternatives {3, 5, 8, 10}
+(see Recently Completed) - a real, replicated win this time, unlike the last three checks. Three
+metrics now use a per-metric window instead of the old single global 5. Remaining open items:
+
+**Cleared as of 2026-08-30 (continued)** - `StatsRefreshWorker` end-to-end dry run done (see
+Recently Completed), a real bug found and fixed along the way. Remaining open items:
+
+**Cleared as of 2026-08-30 (continued again)** - with the calibration campaign and the stats-refresh
+dry run both done, the user asked to move to UI/UX (frontend hasn't been surveyed for real gaps
+since early in this document's history). A read-only frontend investigation turned up a concrete,
+prioritized set of next items - not yet built, just scoped and agreed with the user:
+
+1. **Replace the hardcoded "Featured players" homepage section with real, data-driven picks**
+   (recommended starting point). `frontend/src/data/featuredPlayers.js` is 3 static players
+   (Josh Allen, Jalen Hurts, Terry McLaurin) with hand-written blurbs, never touching the API -
+   same "hand-picked instead of real" pattern this whole session has been fixing on the backend,
+   just never applied to the UI. Something like "this week's top predicted performers" or
+   "trending searches," sourced from real prediction data, would replace it with something genuine.
+2. **UI copy is now quietly stale for 3 metrics.** The 2026-08-30 per-metric recent-game window
+   change (receivingYards/passingTouchdowns/turnovers now use 10/8/10 games instead of 5) means any
+   UI text still saying "last 5 games" for those specific metrics is wrong. Needs an audit of
+   `PlayerDetailPage` copy in `frontend/src/App.jsx` against what's actually true post-recalibration.
+3. **No 404/catch-all route.** `frontend/src/App.jsx`'s router (~line 1365) only defines `/`,
+   `/players/:athleteId`, `/matchups`, `/faq` - a typo'd or stale URL currently just renders blank
+   instead of a real not-found page.
+4. **Surface the predicted final score on `/matchups`.** `TeamMatchupPredictionService.predictScore`
+   already exists and runs live, but the matchups page (`frontend/src/App.jsx` MatchupsPage,
+   ~line 1295) only shows the win-confidence percentage, not the predicted score itself - a small,
+   low-effort addition using infrastructure that's already there, and a natural stepping stone
+   toward the separately-scoped "compare predicted vs. actual score" backtest idea below.
+5. Priority 6/8 UX and data-completeness backlog (last-X-game trend depth, defensive rank
    calculations) - real, lower-urgency work whenever prediction-quality investigation runs dry.
-4. Secondary/fun (explicitly lower priority than the above, per 2026-08-28 user direction): a real
+6. Secondary/fun (explicitly lower priority than the above, per 2026-08-28 user direction): a real
    backtest-style comparison of the model's own predicted score against actual final scores.
    `predictScore` already exists and runs live - this would be a new backtest endpoint/view, not new
    prediction logic, so should be quick once picked up.
+7. **Residual, untested assumption**: `nflreadr::most_recent_season()` returned 2025 during the
+   2026-08-30 dry run (correct - the 2026 season hadn't started yet), and every script that doesn't
+   take an explicit season argument relies on this flipping over to 2026 on its own once real 2026
+   games exist. Expected to self-correct (this is nflreadr's own season-detection logic, not
+   anything this app controls), but hasn't been directly observed - worth a quick sanity check
+   after the first real 2026-09-09 refresh actually runs, not before.
 
 ## Recently Completed
 
-- (2026-08-28, the actual latest) **PFR advanced rushing (`rushing_yards_after_contact`/
+- (2026-08-30, the actual latest) **`StatsRefreshWorker`'s full ten-script chain run end-to-end for
+  real for the first time - a real bug found and fixed along the way, plus the season-start dry run
+  itself.** The chain had only ever been exercised one script at a time via manual `Rscript` calls
+  across many sessions; this was the first time all ten ran together, in the real documented order,
+  via the same mechanism production actually uses.
+  - **Real bug found**: `refreshIfDueAsync()` fired all ten `rScriptRunner.run(...)` calls
+    unconditionally, never checking any of their boolean return values. A failed
+    `import_schedules.R` - the one script the class doc itself says everything else depends on
+    being fresh - would have silently let the other nine run against stale schedule data, with
+    nothing beyond `RScriptRunner`'s own per-script error log to notice anything went wrong. Fixed:
+    the chain now aborts entirely if `import_schedules.R` fails, but keeps running the other nine
+    independently on any single one of *them* failing (they're largely independent enrichments - a
+    snap-counts hiccup shouldn't block the Elo recompute at the end of the chain), and always logs
+    one clear pass/fail summary at the end instead of only ever seeing scattered per-script logs.
+    Also wrapped the whole method in a catch-and-log, matching this app's established "`@Async`
+    methods must log" convention (nothing else ever observes this `CompletableFuture` -
+    `StatsRefreshScheduler` fires it and forgets it - so an uncaught exception would otherwise
+    vanish silently). Two new tests cover both the abort-on-schedules-failure and
+    continue-past-other-failures paths; full suite 92/92 green.
+  - **Real end-to-end dry run**: ran all ten scripts for real, in the documented order, from the
+    real working directory, using bare `Rscript` (not a hardcoded full path) to specifically verify
+    the untested assumption baked into `RScriptRunner`'s default config
+    (`agp.etl.r-executable: Rscript`, relying on PATH resolution rather than a full path) actually
+    resolves correctly when spawned the way the real Java `ProcessBuilder` would spawn it - it did.
+    All ten scripts succeeded (exit code 0), real row counts throughout (19,400 player stat rows/
+    3,526 players, 570 team defense rows, 19,368 snap-count updates, 6,590 Elo rating rows, etc.),
+    total wall time ~12.3 minutes (longest single script, `refresh_stored_players_weekly.R`, took
+    7.4 minutes - comfortably under `RScriptRunner`'s 15-minute per-script timeout). Confirms the
+    documented script-ordering dependencies hold up in practice (e.g. `import_pfr_defense_advanced.R`/
+    `import_participation_defense.R` both ran cleanly after `import_team_defense.R`, which they
+    UPDATE rows from). One residual, untested assumption flagged in the rotating list above:
+    `nflreadr::most_recent_season()` correctly returned 2025 during this dry run (2026 hadn't
+    started) - expected, but not directly observed, to flip to 2026 once real 2026 games exist.
+
+- (2026-08-30, before the StatsRefreshWorker work above) **Player-prop recent-game window length
+  (`PlayerPredictionService.RECENT_GAME_WINDOW`, the count of a player's most recent games that
+  count as "recent form" in the blend) retested against alternatives with a real held-out
+  methodology - the first genuine win after three consecutive replicated nulls (Elo constants,
+  blend weight, `rushingQualityAdjustment`), closing out the last item on the 2026-08-28 rotating
+  list.** Unlike a regression coefficient, window length is a small discrete menu choice, not
+  something to fit - directly evaluated held-out MAE for windows {3, 5, 8, 10} (using the existing
+  0.65/0.35 blend weight, unchanged) across the same 6 temporal cutoffs (2018-2023) used throughout
+  this session, computed straight from `player_game_stats` in R rather than through the Java
+  calibration export (window length isn't one of that export's fields). Three metrics showed a
+  real, replicated win - the SAME window beat the default 5 on every single one of the 6 cutoffs,
+  not just on average: `receivingYards` (window 10, MAE improved 0.6%-1.6% across cutoffs),
+  `passingTouchdowns` (window 8, 0.6%-1.9%), `turnovers` (window 10, 0.9%-2.1%). `rushingYards`/
+  `receptions`/`touchdowns` were already optimal at 5 - left unchanged. `passingYards` leaned toward
+  a smaller window (3) but only won 5 of 6 cutoffs (lost at the 2020 cutoff) - not clean enough to
+  trust by this session's own bar, left at the default.
+  - **Implementation**: added `RECENT_GAME_WINDOW_BY_METRIC` (a small override map, defaulting to
+    `RECENT_GAME_WINDOW` for every metric not listed) and a shared `recentGameWindowFor(metric)`
+    helper. `buildProjection` now slices its per-metric `recentAverage` window from `allStats` (the
+    full point-in-time-correct history, already available) instead of the passed-in `recentStats`,
+    which stays fixed at the old 5-game window for the *other* adjustment methods
+    (`rushingQualityAdjustment`/`advancedMetricAdjustment`/`targetShareAdjustment`/`usageAdjustment`)
+    that were calibrated against that specific window and would otherwise have silently started
+    seeing a different one. `PredictionBacktestService`'s `CalibrationRow` export was updated the
+    same way, so future recalibration work reads what the live formula actually uses rather than a
+    stale fixed-5 value for these three metrics.
+  - Two new unit tests: a direct check of the override map, and a `buildProjection`-level test that
+    deliberately passes a `recentStats` list different from `allStats`' own 10-game prefix, so a
+    passing assertion proves the wider window is really being read from `allStats` and not a silent
+    fallback to the old list. Full suite 90/90 green. Verified live via `/api/backtest/outcomes`
+    after a clean restart - no anomalies (receivingYards MAE 18.26, passingTouchdowns MAE 0.908,
+    turnovers MAE 0.792, all in the expected range).
+
+- (2026-08-28, before the window-length work above) **PFR advanced rushing (`rushing_yards_after_contact`/
   `rushing_yards_before_contact`/`rushing_broken_tackles`) was only backfilled for the 2025 season -
   found while retesting `rushingQualityAdjustment` below, same "backfill gap, not a real
   data-availability limit" pattern as several other bugs this session.**
